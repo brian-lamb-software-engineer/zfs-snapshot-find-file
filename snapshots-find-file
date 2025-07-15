@@ -1,0 +1,972 @@
+#!/bin/bash
+# this file aims to dig into all snapshots, unless otherwise specified which snapshots, and search in specified DATASETPATH in all those snapshots for a given file name
+
+#VARS
+FILESTR=()
+# no leading or trailing slashes
+ZFSSNAPDIR=".zfs/snapshot"
+FILENAME="*"
+RED='\033[0;31m'
+YELLOW='\033[33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Variables for the comparison functionality
+# Array of regex patterns for paths to ignore during comparison.
+# Each entry should be a distinct regex pattern.
+# add whatever else you need here
+# Think of IGNORE_REGEX_PATTERNS as "things I don't care about preserving in my snapshot history."
+# Examples:
+#   - ^.*\.cache/.*$            (Ignores any path containing ".cache/" anywhere)
+#   - ^/pool/data/temp/.*$      (Ignores anything under /pool/data/temp/)
+#   - ^.*/example1\.tmp$        (Ignores files ending with "example1.tmp")
+#   - ^.*/log_files/.*\.log$    (Ignores .log files in log_files directory)
+#   - ^.*/(?:cache|tmp)/.*$     (Ignores paths containing either "cache" or "tmp" directory)
+IGNORE_REGEX_PATTERNS=(
+  "^.*\.cache/.*$" # Example 1: Ignore cache directories
+  "^.*/tmp/.*$" # Example 2: Ignore temporary directories
+  "^.*/\.DS_Store$" # Example 3: Ignore macOS specific files
+  "^.*/thumbs\.db$" # Example 4: Ignore Windows specific thumbnail files
+)
+# Temporary file to accumulate all found snapshot file paths if comparison is requested.
+# Declared globally here as requested.
+all_snapshot_files_found_tmp=$(mktemp)
+# Timestamp for all new log files to ensure consistency
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+
+# Global vars that will be populated by functions; for adding new functions parse_arguments and initialize_search_parameter
+DATASETPATH=""
+SNAPREGEX=""
+RECURSIVE=0
+COMPARE=0
+VERBOSE=0
+OTHERFILE="" # Although not currently used in core logic, keep for completeness
+DSP_CONSTITUENTS_ARR_CNT=0
+TRAILING_WILDCARD_CNT=0
+BASE_DSP_CNT=0
+DATASETS=() # Will store the list of datasets to iterate
+
+
+function help(){
+  echo
+  echo "A ZFS snapshot search tool. 
+    - Uses a constructed 'find' command to search in specified(or all) snaps, for specified file, recursively.  
+    - Has the ability to search for multiple or all snaps in a given dataset by using wildcard.  
+    - Has the ability to search file names by wildcard and maybe other regex calls
+    - Has the ability to search for multiple files in the same run by specifying multiple files (faster than running multiple times).
+    - Has the ability to search in child datasets snaps(all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc.. 
+    "
+  echo "USAGE: 
+    snapshots-find-file  
+    -c (compare snapshot files to live dataset files to find missing ones)
+    -d <dataset-path to search through>, 
+    -f <file-your-searching-for another-file> (multiple space separated allowed), 
+    -o <other-file-your-searching--for> 
+    -s <snapshot-name-regex-term>, 
+    -r (recursively search into child datasets) 
+    -v (verbose output), 
+    -h (this help)
+    "
+  echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"  
+  echo '
+    # search recursively, for all files in a given dataset, and its childs datasets recursively, and print verbose output
+    snapshots-find-file -d "/pool/data/set" -rv'
+  echo '
+    #search for specified file in all of this dataset(only) snaps (wont iterate into child dataset snaps)
+    snapshots-find-file -d "/pool/data/set"  -s "*" -f "*1234*jpg" 
+    snapshots-find-file -d "/pool/data/set/" -s "*" -f "*1234*jpg"' 
+  echo '
+    # same as before except search only snaps which reside inside all child datasets(only 1 level deep) of mentioned dataset only
+    snapshots-find-file -d "/pool/data/set/*" -s "*" -f "*1234*"' 
+  echo '
+    #same as before, except specifying specifc regex for snap name
+    snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*"' 
+  echo '
+    # same as before except adding a 2nd and 3rd file to search for
+    snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*.jpg *otherfile*.jpg yet-another-file.img"' 
+  echo '
+    #search through specific snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset 
+    snapshots-find-file -d "/pool/*/set/*/*" -s "*my-snap*" -f "*1234*.jpg"'
+  echo '
+    #search through all snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset (will not pick up a 3rd level)
+    snapshots-find-file -d "/pool/data/set/*/*" -s "*" -f "*1234*.jpg"' 
+  echo '
+    #search recursively with verbose, through all datsets snaps, and for all files (short form) (e.g. list all snapshot files)
+    snapshots-find-file -d "/pool" -rv'
+  exit 1;
+}
+
+
+##
+# NEW FUNCTION: process_snapshots_for_dataset
+# Purpose: Iterates through snapshots within a given dataset and performs search operations.
+# Arguments:
+#   $1: dataset - The current dataset path to process.
+# Global Variables Used:
+#   ZFSSNAPDIR, SNAPREGEX, FILESTR, VERBOSE, COMPARE, all_snapshot_files_found_tmp
+#   DSP_CONSTITUENTS_ARR_CNT, TRAILING_WILDCARD_CNT, BASE_DSP_CNT (from initialize_search_parameters)
+##
+function process_snapshots_for_dataset() {
+  local dataset="$1"
+
+  # Ensure globbing is on for the SNAPREGEX comparison, though set +f is already
+  # at the start of the main procedural block, this is a safeguard.
+  #set +f
+  # no need for that here if its set globally at beginning of procedural
+
+  ##
+  # CUSTOM CODE CONTINUE BEGIN
+    # manipulate dataset results since  when using trailing wildcards zfs list returns not just the ones that match the wildcards, the ones above them up to the specified one before the wildcard.  e.g. /pool/data/set/*/*/ will return /pool/data/set, /pool/data/set/1, but we would only expect to be searching only the childs, e.g. /pool/data/set/1/a, and maybe another /pool/data/set/1/b. 
+    #since trailing wildcards were defined, lets strip the datasets that come before the wildcard, from zfs list results to refine the datasets
+    # This logic manipulates dataset results when using trailing wildcards
+    if [[ ! -z "$TRAILING_WILDCARD_CNT" ]] && [[ "$TRAILING_WILDCARD_CNT" -gt 0 ]]; then
+      # ADDED: Declared DS_CONST_ARR as local and used robust read -a
+      local DS_CONST_ARR
+      IFS=$'\n' read -r -d '' -a DS_CONST_ARR < <(echo "$dataset" | tr '/' '\n')
+      # ADDED: Declared DS_CONST_ARR_CNT as local
+      local DS_CONST_ARR_CNT=${#DS_CONST_ARR[@]}
+  
+      # echo trailing wildcard count = $TRAILING_WILDCARD_CNT
+      # echo base dataset path count = $BASE_DSP_CNT
+      # stripd dataset dirs off DSP_CONSTITUENTS_ARR that are less than the specified wildcard paths (because zfs list just returns them all when wildcard specified)
+  
+      # get count of this datasets specified path depth
+      # echo "DS_CONST_ARR: ${DS_CONST_ARR[@]}"
+      # echo "DS_CONST_ARR_CNT: $DS_CONST_ARR_CNT"
+  
+      # if this zfs list result dataset path depth count is less than or equal to depth count of the total elements in specified path then skip it
+      # MODIFIED: Changed 'continue' to 'return' to exit function for this dataset
+      if [[ "$DS_CONST_ARR_CNT" -le "$BASE_DSP_CNT" ]]; then
+        [[ $VERBOSE == 1  ]] && echo -e "Skipping dataset (too high in hierarchy for trailing wildcards): ${dataset}"
+        return # Exit the function for this dataset
+      fi
+      [[ $VERBOSE == 1  ]] && echo && echo -e "Searching Dataset:(${PURPLE}$dataset${NC})"
+    fi
+    # echo $dataset
+    ##
+  
+    # ADDED: Declared snapdirs as local
+    local snapdirs="/$dataset/$ZFSSNAPDIR/*"
+    # echo "snapdirs $snapdirs"
+    for snappath in $snapdirs; do
+      #[[ $VERBOSE == 1 ]] && echo ..
+  
+      # dont process if snapshots dir is empty
+      if [[ ! -d "$snappath" ]]; then
+        [[ $VERBOSE == 1 ]] && echo -e "(${YELLOW}No Snapshots found in this dataset${NC}})"
+        continue
+      fi
+  
+      # ADDED: Declared SNAPNAME as local
+      local SNAPNAME=$(/bin/basename "$snappath")
+  
+      #symlink check, skip if true
+      # FIX: Corrected variable from $d to $snappath for the symlink check
+      [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "skipping symlink: ${snappath}" && continue
+  
+      [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${YELLOW}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}' (Path: ${YELLOW}${current_snap_path}${NC})"
+      [[ $VERBOSE == 1 ]] && echo "DEBUG: SNAPNAME='$SNAPNAME', SNAPREGEX='$SNAPREGEX'" 
+
+      local regex_pattern
+
+      # If SNAPREGEX is literally '*', convert it to '.*' for regex to match anything (including empty string, though SNAPNAME shouldn't be empty)
+      if [[ "$SNAPREGEX" == "*" ]]; then
+        regex_pattern=".*"
+      else
+        # For other patterns, escape regex special characters and wrap in '.*' for a 'contains' match
+        # The sed command will convert glob wildcards like '*' or '?' to their regex equivalents
+        # and escape other characters that have special meaning in regex.
+        regex_pattern="$(printf '%s' "$SNAPREGEX" | sed -e 's/[][\.^$*+?(){}|]/\\&/g' -e 's/\*/.*/g' -e 's/?/./g')"
+        regex_pattern=".*$regex_pattern.*" # Wrap in .* to ensure 'contains' logic similar to globbing
+      fi
+
+     # if [[ ! "$SNAPNAME" == *"$SNAPREGEX"* ]]; then
+      # Use the =~ operator for regular expression matching
+      # This matches if SNAPNAME contains the regex_pattern
+      if [[ ! "$SNAPNAME" =~ $regex_pattern ]]; then
+        [[ $VERBOSE == 1 ]] && echo "Skippping, doesnt match -s regex"
+        continue;
+      fi
+      [[ $VERBOSE == 1 ]] && echo -e "Search path:(${BLUE}$snappath${NC})" && echo .
+  
+      ##
+      # NEW FUNCTIONALITY MODIFICATION BEGIN: Conditional find command execution & bugfix
+      # This block ensures 'local' declarations and 'zfs get' are performed only
+      # when in COMPARE mode,
+      # It also corrects the 'zfs get' commands target and the 'xargs' arg passing for accurate path construction
+      ##
+      if [[ $COMPARE == 1 ]]; then
+        # ADDED: Declared full_snap_id as local
+        # Correctly determine the full snapshot ID (dataset@snapshot) for zfs get
+        local full_snap_id="${dataset}@${SNAPNAME}"
+  
+        # ADDED: Declared creation_time_epoch as local
+        # Get creation timestamp for the current snapshot using the correct full snapshot ID
+        local creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
+  
+        # Output format: live_equivalent_path|snapshot_name|creation_time_epoch
+        # `_` is a dummy variable for `bash -c` to ensure correct argument parsing.
+        # $1: dataset (full path), $2: snappath, $3: SNAPNAME, $4: creation_time_epoch
+        /bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -print0 2>/dev/null | \
+        #xargs -0 -I {} bash -c 'echo "'"${1%/}"'${0#'"${2}"'}|'"${3}"'|'"${4}"'"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" >> "$all_snapshot_files_found_tmp"
+        xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+  
+      else
+        # ADDED: Declared RESULTS as local
+        # Original functionality: find files and list them using ls.
+        # The `grep` pipe was previously removed as it was causing 'ls terminated by signal 13' errors.
+        local RESULTS=`/bin/time -f "time(sec):%e" /bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -exec ls -lh --color=always -g {} \;`
+        [[ ! -z "$RESULTS" ]] && echo "$RESULTS"
+      fi
+      ##
+      # NEW FUNCTIONALITY MODIFICATION END
+      ##
+  
+      [[ $VERBOSE == 1 ]] && echo ... && echo
+    done
+}
+
+
+##
+# NEW FUNCTIONALITY SECTION BEGIN: compare_snapshot_files_to_live_dataset function
+# Purpose: Compares a provided list of files (from snapshots) to the live dataset
+#          to identify files that exist in the snapshot(s) but are missing
+#          from the live dataset. It also logs the output to a timestamped file.
+#
+# Arguments:
+#   $1: snapshot_file_list_tmp - Path to a temporary file containing a list of
+#                                full file paths found in snapshots (one per line).
+#   $2: live_dataset_path      - The path to the live dataset to compare against.
+#
+# Global Variables Used:
+#   VERBOSE:    Flag for verbose output (set by -v).
+#   IGNORE_REGEX_PATTERNS: Array of regex patterns for paths to ignore.
+#   RED, YELLOW, BLUE, PURPLE, NC: Color codes for console output.
+##
+function compare_snapshot_files_to_live_dataset() {
+  local raw_snapshot_file_list_tmp="$1" # Expects file with live_equivalent_path|snap_name|timestamp
+  local live_dataset_path="$2"
+  local log_file="comparison-$TIMESTAMP.out"
+  local ignored_log_file="compare-ignore-$TIMESTAMP.out"
+
+  echo -e "${BLUE}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}"
+  echo "Comparison initiated on $(date)" > "$log_file"
+  echo "Live dataset path: $live_dataset_path" >> "$log_file"
+  echo "Ignored patterns:" >> "$log_file"
+  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+    echo "  - $pattern" >> "$log_file"
+  done
+  echo "" >> "$log_file"
+  echo "Files missing from live dataset but present in snapshot(s):" >> "$log_file"
+  echo "------------------------------------------------------------" >> "$log_file"
+  echo -e "${BLUE}Logging ignored files to:${NC} ${YELLOW}$ignored_log_file${NC}"
+  echo "Unique Ignored Files (matching patterns in IGNORE_REGEX_PATTERNS):" > "$ignored_log_file"
+  echo "------------------------------------------------------------" >> "$log_file"
+
+  # Temporary file to store paths of files in the live dataset
+  local live_files_tmp=$(mktemp)
+
+  # 1. Get all files in the current live dataset
+  [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Gathering live dataset files from: $live_dataset_path${NC}"
+  # Use -L to dereference symlinks to ensure we get actual file paths.
+  # Using -print0 and xargs -0 for robust handling of special characters in filenames.
+  #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
+  #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$1"' _ "{}" > "$live_files_tmp"\
+  /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
+
+
+  [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Live dataset file count: $(wc -l < "$live_files_tmp")${NC}"
+
+  local missing_files_count=0
+  # Temporary file to track paths already reported to avoid duplicates in main log
+  local seen_paths_tmp=$(mktemp)
+  # Temporary file to track unique ignored paths for the ignored_log_file
+  local seen_ignored_paths_tmp=$(mktemp)
+
+  # Sort the raw snapshot file list by live_equivalent_path then by creation_timestamp (NEWEST first)
+  # This ensures that when a path is encountered, it's the one from the newest snapshot.
+  # Using | as delimiter for sort. -k1,1 ensures sorting on the first field (path),
+  # -k3,3nr on the third field (timestamp) numerically in reverse (newest first).
+  local sorted_snapshot_files_tmp=$(mktemp)
+  cat "$raw_snapshot_file_list_tmp" | sort -t'|' -k1,1 -k3,3nr > "$sorted_snapshot_files_tmp"
+
+  # Read sorted snapshot file paths (path|snap_name|timestamp)
+  # Using 'while read -r' for robust line-by-line reading.
+  while IFS='|' read -r live_equivalent_path snap_name creation_time_epoch || [[ -n "$live_equivalent_path" ]]; do
+      # Check if this exact path has already been processed and reported
+      if grep -Fxq "$live_equivalent_path" "$seen_paths_tmp"; then
+         # [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Skipping (already reported): $live_equivalent_path (from snapshot: $snap_name, timestamp: $creation_time_epoch)${NC}"
+          ((skipped_reported_files_count++)) # Increment skip counter
+          continue # Skip if already seen
+      fi
+
+      # Check against the ignore list first
+      local ignore_match=0
+      for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+          if [[ "$live_equivalent_path" =~ $pattern ]]; then
+              # Log unique ignored files to their separate file
+              if ! grep -Fxq "$live_equivalent_path" "$seen_ignored_paths_tmp"; then
+                  echo "$live_equivalent_path (ignored by pattern: '$pattern')" >> "$ignored_log_file"
+                  echo "$live_equivalent_path" >> "$seen_ignored_paths_tmp"
+              fi
+              [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}"
+              ignore_match=1
+              break
+          fi
+      done
+
+      if [[ $ignore_match -eq 0 ]]; then
+          # Check if the live_equivalent_path exists in our list of live files
+          # Using grep -Fxq for exact string match and quiet output.
+          if ! grep -Fxq "$live_equivalent_path" "$live_files_tmp"; then
+              echo "$live_equivalent_path (found in newest snapshot: $snap_name)" | tee -a "$log_file"
+              echo "$live_equivalent_path" >> "$seen_paths_tmp" # Mark as seen
+              ((missing_files_count++))
+          fi
+      fi
+  done < "$sorted_snapshot_files_tmp"
+
+  echo "" >> "$ignored_log_file"
+  echo "Ignored files cataloging finished." >> "$ignored_log_file"
+  echo -e "${YELLOW}Total files skipped (already reported): $skipped_reported_files_count${NC}" | tee -a "$log_file"
+  echo "" | tee -a "$log_file"
+  echo "------------------------------------------------------------" | tee -a "$log_file"
+  echo "Comparison finished. Total missing files found: $missing_files_count" | tee -a "$log_file"
+
+  # Cleanup temporary files
+  rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
+
+}
+# NEW FUNCTIONALITY SECTION END
+##
+
+##
+# NEW FUNCTIONALITY SECTION BEGIN: log_snapshot_deltas function
+# Purpose: Logs the differences (added/modified files) between each snapshot and its parent.
+#          Ignores files matching IGNORE_REGEX_PATTERNS.
+#          Outputs to a file named comparison-delta-<TIMESTAMP>.out.
+# Arguments:
+#   $1: dataset_path - The base dataset path.
+#   $2: datasets_array - Reference to the array of datasets to process.
+# Global Variables Used:
+#   TIMESTAMP, VERBOSE, IGNORE_REGEX_PATTERNS, RED, YELLOW, BLUE, PURPLE, NC.
+##
+##
+# old function before adding in deleted - modofied M and + (new) files altogether
+##
+#function log_snapshot_deltas() {
+#  local dataset_path="$1"
+#  shift # Remove the first argument (dataset_path)
+#  #local -n datasets_array="$2" # Use nameref to access the global DATASETS array
+#  #local datasets_array_name="$2" # Variable to hold the name of the array
+#  # Use indirect expansion to access the array elements
+#  # This pattern means: ${!variable_holding_array_name[@]}
+#  #local -a datasets_array=("${!datasets_array_name[@]}") # Populate local array from global array by name
+#  local -a datasets_array=("$@") 
+#
+#  if [[ ${#datasets_array[@]} -eq 0 ]]; then
+#    echo -e "${YELLOW}No datasets found for delta analysis. Skipping.${NC}" | tee -a "$delta_log_file"
+#    return # Exit function if no datasets to process
+#  fi
+#
+#  local delta_log_file="comparison-delta-$TIMESTAMP.out"
+#
+#  echo -e "${BLUE}Logging snapshot deltas to:${NC} ${YELLOW}$delta_log_file${NC}"
+#  echo "Snapshot Delta Analysis initiated on $(date)" > "$delta_log_file"
+#  echo "Dataset path: $dataset_path" >> "$delta_log_file"
+#  echo "Ignored patterns:" >> "$delta_log_file"
+#
+#  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+#    echo "  - $pattern" >> "$delta_log_file"
+#  done
+#
+#  echo "" >> "$delta_log_file"
+#
+#  # Iterate datasets (already filtered by recursive/wildcard logic in main script)
+#  for dataset in "${datasets_array[@]}"; do
+#      [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Analyzing deltas for dataset: $dataset${NC}"
+#      echo "--- Dataset: $dataset ---" >> "$delta_log_file"
+#
+#      # Get snapshots for this dataset, sorted by creation time DESCENDING (newest to oldest)
+#      # We need parent/child pairs, so list all and process in reverse chronological order.
+#      local snapshots=$(zfs list -t snapshot -o name,creation -s creation "$dataset" | tail -n +2) # Skip header
+#      local snap_names=($(echo "$snapshots" | awk '{print $1}'))
+#
+#      # Iterate snapshots from newest to oldest for delta reporting
+#      for (( i=${#snap_names[@]}-1; i>=0; i-- )); do
+#          local current_snap_name="${snap_names[i]}"
+#          local parent_snap_name=""
+#          if (( i > 0 )); then
+#              parent_snap_name="${snap_names[i-1]}"
+#          else
+#              # If it's the oldest snapshot, compare against the live filesystem
+#              parent_snap_name="$dataset"
+#          fi
+#
+#          echo "\n--- Delta for: $current_snap_name (compared to $parent_snap_name) ---" >> "$delta_log_file"
+#          [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing $current_snap_name to $parent_snap_name${NC}"
+#
+#          # Use zfs diff to get changes, filter for Added/Modified/Renamed, then filter by ignore list
+#          # `M` for modified, `A` for added. `R` for renamed also counts as modified content.
+#          zfs diff -H "$parent_snap_name" "$current_snap_name" | awk '/^(M|A|R)/ {print $NF}' | while IFS= read -r changed_file_path; do
+#              local is_ignored=0
+#              for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+#                  if [[ "$changed_file_path" =~ $pattern ]]; then
+#                      is_ignored=1
+#                      break
+#                  fi
+#              done
+#              if [[ $is_ignored -eq 0 ]]; then
+#                  echo "  $changed_file_path" >> "$delta_log_file"
+#              fi
+#          done
+#      done
+#  done
+#  echo "\nDelta analysis finished." >> "$delta_log_file"
+#}
+# new form of the function with - + M checks, needs proofing
+function log_snapshot_deltas() {
+  local dataset_path="$1"
+  shift # Remove the first argument (dataset_path)
+  #local -n datasets_array="$2" # Use nameref to access the global DATASETS array
+  #local datasets_array_name="$2" # Variable to hold the name of the array
+  # Use indirect expansion to access the array elements
+  # This pattern means: ${!variable_holding_array_name[@]}
+  #local -a datasets_array=("${!datasets_array_name[@]}") # Populate local array from global array by name
+  local -a datasets_array=("$@")
+
+  if [[ ${#datasets_array[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No datasets found for delta analysis. Skipping.${NC}" | tee -a "$delta_log_file"
+    return # Exit function if no datasets to process
+  fi
+
+  local delta_log_file="comparison-delta-$TIMESTAMP.out"
+
+  echo -e "${BLUE}Logging snapshot deltas to:${NC} ${YELLOW}$delta_log_file${NC}"
+  echo "Snapshot Delta Analysis initiated on $(date)" > "$delta_log_file"
+  echo "Dataset path: $dataset_path" >> "$delta_log_file"
+  echo "Ignored patterns:" >> "$delta_log_file"
+
+  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+    echo "  - $pattern" >> "$delta_log_file"
+  done
+
+  echo "" >> "$delta_log_file"
+
+  # Add CSV header at the top of the delta log for easy parsing
+  echo "Type,File_Path,Is_Ignored,Comparison_Context,Full_Parent_Snap,Full_Current_Snap" >> "$delta_log_file"
+
+  # Iterate datasets (already filtered by recursive/wildcard logic in main script)
+  for dataset in "${datasets_array[@]}"; do
+    [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Analyzing deltas for dataset: $dataset${NC}"
+    echo "--- Dataset: $dataset ---" >> "$delta_log_file"
+
+    # Get snapshots for this dataset, sorted by creation time ASCENDING (oldest to newest)
+    # We will iterate and build parent/child pairs
+    local snapshots_raw=$(zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2) # Skip header
+    local -a snap_names=()
+    while IFS= read -r line; do
+      snap_names+=("$line")
+    done < <(echo "$snapshots_raw")
+
+    # Add the live filesystem itself as the "latest point" for comparison with the newest snapshot
+    local -a all_compare_points=("${snap_names[@]}" "$dataset")
+
+    # If there's only one item (just the live dataset or no snapshots), skip diffing pairs
+    if [[ ${#all_compare_points[@]} -lt 2 ]]; then
+      echo "  No snapshots or only live dataset for $dataset. Skipping delta comparisons." >> "$delta_log_file"
+      continue
+    fi
+
+    # Iterate through comparison pairs (oldest snapshot to next, newest snapshot to live)
+    for (( i=0; i<${#all_compare_points[@]}-1; i++ )); do
+      local parent_compare_point="${all_compare_points[i]}"
+      local current_compare_point="${all_compare_points[i+1]}"
+      local comparison_context="${parent_compare_point} to ${current_compare_point}"
+
+      echo "\n--- Delta for: ${current_compare_point} (compared to ${parent_compare_point}) ---" >> "$delta_log_file"
+      [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing ${current_compare_point} to ${parent_compare_point}${NC}"
+
+      # Use zfs diff to get changes
+      # Pipe directly to while read for robust parsing
+      /sbin/zfs diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
+        local diff_type_char="${type:0:1}" # Extract the first char (+, -, M, R, D, etc.)
+        local full_path="${path}" # Initialize full_path
+        local is_ignored="false"
+        local rendered_type="" # For CSV output (ADD, DEL, MOD, REN)
+
+        case "$diff_type_char" in
+          '+') rendered_type="ADD" ;;
+          '-') rendered_type="DEL" ;;
+          'M') rendered_type="MOD" ;;
+          'R')
+            rendered_type="REN"
+            # For renames, the path is "old_path -> new_path". We want to check the new path for ignore patterns
+            full_path="${path}" # Keep the full 'old -> new' string in the CSV path field
+            local new_path_for_check="${path##* -> }" # Extract only the new path for pattern matching
+            # Check new_path_for_check against ignore patterns
+            for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+              if [[ "$new_path_for_check" =~ $pattern ]]; then
+                is_ignored="true"
+                break
+              fi
+            done
+            ;;
+          *) continue ;; # Skip other diff types like 'D' (directory), '?' etc.
+        esac
+
+        # For non-renames, check the full_path against ignore patterns
+        if [[ "$diff_type_char" != "R" ]]; then
+          for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+            if [[ "$full_path" =~ $pattern ]]; then
+              is_ignored="true"
+              break
+            fi
+          done
+        fi
+
+        # Output in CSV format
+        # Use printf for robust CSV quoting, especially if paths have commas or quotes
+        # Replace existing echo with printf
+        printf "%s,\"%s\",%s,\"%s\",\"%s\",\"%s\"\n" \
+               "${rendered_type}" \
+               "${full_path//\"/\"\"}" \
+               "${is_ignored}" \
+               "${comparison_context//\"/\"\"}" \
+               "${parent_compare_point//\"/\"\"}" \
+               "${current_compare_point//\"/\"\"}" >> "$delta_log_file"
+      done
+    done
+  done
+  echo "\nDelta analysis finished." >> "$delta_log_file"
+}
+# NEW FUNCTIONALITY SECTION END
+
+##
+
+##
+# NEW FUNCTIONALITY SECTION BEGIN: identify_and_suggest_deletion_candidates function
+# Purpose: Identifies snapshots that could be deleted if their unique delta
+#          (added/modified files compared to parent) consists solely of files
+#          matching the IGNORE_REGEX_PATTERNS.
+#          Suggests deletion (with commented out zfs destroy command) from newest to oldest.
+#
+# A snapshot is a "Deletion Candidate" if:
+# When you compare it to its parent (the snapshot it was taken from, or the live filesystem if it's the oldest):
+# AND there are + (added) files
+# OR there are M (modified) files
+# AND ALL of those + or M files match one of your IGNORE_REGEX_PATTERNS.
+# Simplified: "If the only changes this snapshot introduced (or preserves) are things I've explicitly told you to ignore, then this snapshot might be safe to delete because it doesn't hold any unique, important data that its parent (or previous snapshot in the chain) doesn't also effectively cover."
+#
+# Arguments:
+#   $1: dataset_path - The base dataset path.
+#   $2: datasets_array - Reference to the array of datasets to process.
+# Global Variables Used:
+#   VERBOSE, IGNORE_REGEX_PATTERNS, RED, YELLOW, BLUE, PURPLE, NC.
+##
+##
+# old function before adding in deleted - modified M and + (new) files altogether
+##
+#function identify_and_suggest_deletion_candidates() {
+#  local dataset_path="$1"
+#  shift # Remove the first argument (dataset_path)
+#
+#  #local -n datasets_array="$2" # Use nameref to access the global DATASETS array
+#  #local datasets_array_name="$2" # Variable to hold the name of the array
+#  # Use indirect expansion to access the array elements
+#  #local -a datasets_array=("${!datasets_array_name[@]}") # Populate local array from global array by name
+#  local -a datasets_array=("$@") 
+#
+#  if [[ ${#datasets_array[@]} -eq 0 ]]; then
+#    echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
+#    return # Exit function if no datasets to process
+#  fi
+#
+#  echo -e "\n${BLUE}--- Identifying Snapshot Deletion Candidates ---${NC}"
+#  echo "Candidates are snapshots where ALL added/modified files (delta from parent)"
+#  echo "match your IGNORE_REGEX_PATTERNS."
+#  echo "Review the 'comparison-<timestamp>.out' log before deleting any snapshot."
+#  echo "------------------------------------------------------------"
+#
+#  # Iterate datasets (already filtered by recursive/wildcard logic in main script)
+#  for dataset in "${datasets_array[@]}"; do
+#      [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Checking deletion candidates for dataset: $dataset${NC}"
+#
+#      # Get snapshots for this dataset, sorted by creation time DESCENDING (newest to oldest)
+#      local snapshots=$(zfs list -t snapshot -o name,creation -s creation "$dataset" | tail -n +2) # Skip header
+#      local snap_names=($(echo "$snapshots" | awk '{print $1}'))
+#
+#      # Iterate snapshots from newest to oldest
+#      for (( i=${#snap_names[@]}-1; i>=0; i-- )); do
+#          local current_snap_name="${snap_names[i]}"
+#          local parent_snap_name=""
+#          if (( i > 0 )); then
+#              parent_snap_name="${snap_names[i-1]}"
+#          else
+#              # If it's the oldest snapshot, compare against the live filesystem
+#              parent_snap_name="$dataset"
+#          fi
+#
+#          local has_valuable_changes=0
+#          # Get only Added (A) or Modified (M) or Renamed (R) files in the delta
+#          # yuou may need to run this script as sudo if you get a zfs diff error here, 
+#          # or if you want to permanently add the premission to a user run the following
+#          # sudo zfs allow -l -d -u <username> diff <pool/dataset/name>
+#          zfs diff -H "$parent_snap_name" "$current_snap_name" | awk '/^(M|A|R)/ {print $NF}' | while IFS= read -r changed_file_path; do
+#              local is_ignored=0
+#              for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+#                  if [[ "$changed_file_path" =~ $pattern ]]; then
+#                      is_ignored=1
+#                      break
+#                  fi
+#              done
+#              if [[ $is_ignored -eq 0 ]]; then
+#                  has_valuable_changes=1 # Found a non-ignored change
+#                  break # No need to check further for this snapshot
+#              fi
+#          done
+#
+#          if [[ $has_valuable_changes -eq 0 ]]; then
+#              echo -e "${GREEN}WOULD delete this snapshot: ${current_snap_name}${NC}"
+#              echo "# /sbin/zfs destroy \"${current_snap_name}\""
+#          fi
+#      done
+#  done
+#  echo "------------------------------------------------------------"
+#}
+# new form of the function with - + M checks, needs proofing
+function identify_and_suggest_deletion_candidates() {
+  local dataset_path_prefix="$1" # This is the /nas/live/cloud/ path
+  shift # Remove the first argument
+  local -a datasets_array=("$@") # This contains dataset names like nas/live/cloud/tcc
+
+  if [[ ${#datasets_array[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
+    return # Exit function if no datasets to process
+  fi
+
+  echo -e "\n${BLUE}--- Identifying Snapshot Deletion Candidates ---${NC}"
+  echo -e "Snapshots are suggested for deletion if they do NOT contain:\n" \
+          "  1. Important files that have been deleted from the live filesystem (unignored '-' diffs to live).\n" \
+          "  AND\n" \
+          "  2. Important new files or modifications (unignored '+' or 'M'/'R' diffs from their parent/preceding snapshot).\n" \
+          "Review the 'comparison-delta-${TIMESTAMP}.out' log before deleting any snapshot.\n" \
+          "------------------------------------------------------------${NC}"
+
+  # New section for potentially accidentally deleted files (unignored '-' to live)
+  # These are files you care about, so the snapshot holding them should NOT be deleted.
+  echo -e "\n${BLUE}--- Potentially Accidentally Deleted Files Found ---${NC}"
+  echo -e "The following files exist in a snapshot but have been deleted from the live filesystem."
+  echo -e "Snapshots containing these files (if unignored) WILL NOT be suggested for deletion.\n"
+  echo "Snapshot,File_Path,Live_Dataset_Path" # CSV header for this section
+
+  local accidentally_deleted_count=0
+  local -A snapshots_holding_unignored_deleted # Associative array to mark snapshots that hold unignored deleted files
+
+  # --- PHASE 1: Identify Snapshots Holding Unignored Deleted Files (from Live) ---
+  # This phase primarily populates the 'snapshots_holding_unignored_deleted' array.
+  for dataset in "${datasets_array[@]}"; do
+    local -a snapshots=()
+    # Get all snapshots for the current dataset, sorted by creation time ASCENDING
+    mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
+
+    if [[ ${#snapshots[@]} -eq 0 ]]; then
+      continue # No snapshots for this dataset
+    fi # This was the missing closing brace that caused the error
+
+    local live_dataset_full_name="$dataset" # e.g., nas/live/cloud/tcc
+
+    for current_snap in "${snapshots[@]}"; do
+      # Capture zfs diff output from snapshot to live filesystem
+      local -a diff_output=()
+      mapfile -t diff_output < <(/sbin/zfs diff "$current_snap" "$live_dataset_full_name" 2>/dev/null)
+
+      for line in "${diff_output[@]}"; do
+        local type="${line:0:1}" # First character is diff type
+        local path="${line:2}"   # Rest of the line is the path
+
+        if [[ "$type" == "-" ]]; then # We are only interested in deleted files here
+          local is_ignored="false"
+          for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+            if [[ "$path" =~ $pattern ]]; then
+              is_ignored="true"
+              break
+            fi
+          done
+
+          if [[ "$is_ignored" == "false" ]]; then
+            # Found an unignored deleted file. Mark this snapshot and report it.
+            # Use printf for robust CSV quoting
+            printf "%s,\"%s\",%s\n" \
+                   "${current_snap}" \
+                   "${path//\"/\"\"}" \
+                   "${live_dataset_full_name}"
+            snapshots_holding_unignored_deleted["$current_snap"]="true" # Mark this snapshot as "sacred"
+            ((accidentally_deleted_count++))
+            # No need to break the inner loop; we want to report all such files for this snap
+          fi
+        fi
+      done
+    done
+  done
+
+  if [[ "$accidentally_deleted_count" -eq 0 ]]; then
+    echo "No potentially accidentally deleted files found that are not ignored."
+  fi
+  echo -e "${BLUE}------------------------------------------------------------${NC}"
+
+  echo -e "\n${BLUE}--- Snapshots Suggested for Deletion ---${NC}"
+
+  # --- PHASE 2: Determine Actual Deletion Candidates ---
+  for dataset in "${datasets_array[@]}"; do
+    local -a snapshots=()
+    mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
+
+    # If no snapshots, nothing to delete for this dataset
+    if [[ ${#snapshots[@]} -eq 0 ]]; then
+      continue
+    fi
+
+    local prev_snap=""
+    # Iterate from oldest to newest snapshot
+    for i in "${!snapshots[@]}"; do
+      local current_snap="${snapshots[$i]}"
+
+      local is_deletion_candidate="true" # Assume it's a candidate until proven otherwise
+
+      # Condition 1 Check: Does this snapshot hold unignored deleted files from live?
+      if [[ "${snapshots_holding_unignored_deleted[$current_snap]}" == "true" ]]; then
+        is_deletion_candidate="false"
+        [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains unignored files deleted from live."
+      else
+        # Condition 2 Check: Does it contain unignored additions or modifications relative to its parent/next snapshot?
+        local compare_from=""
+        if (( i > 0 )); then # If not the very first snapshot, compare to its direct parent
+          compare_from="${snapshots[i-1]}"
+        else
+          # If it's the very first snapshot, its "parent" for comparison is the live dataset itself.
+          # This ensures we check if the first snapshot represents the first unignored addition/mod.
+          compare_from="$dataset"
+        fi
+        
+        local compare_to="$current_snap"
+
+        local -a diff_output_for_amr=()
+        # Ensure we always have a valid 'compare_from' before attempting diff
+        if [[ -n "$compare_from" ]]; then
+            mapfile -t diff_output_for_amr < <(/sbin/zfs diff "$compare_from" "$compare_to" 2>/dev/null)
+        fi
+
+        for line in "${diff_output_for_amr[@]}"; do
+          local type="${line:0:1}"
+          local path="${line:2}"
+          
+          # Only interested in ADD, MOD, RENAME for this condition
+          if [[ "$type" == "+" || "$type" == "M" || "$type" == "R" ]]; then
+            local processed_path="${path}"
+            if [[ "$type" == "R" ]]; then
+                processed_path="${path##* -> }" # Extract the new path for rename check
+            fi
+
+            local is_ignored="false"
+            for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+              if [[ "$processed_path" =~ $pattern ]]; then
+                is_ignored="true"
+                break
+              fi
+            done
+            if [[ "$is_ignored" == "false" ]]; then
+              is_deletion_candidate="false" # Found an unignored A/M/R change, so NOT a candidate
+              [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains unignored ${type} change (relative to ${compare_from}): ${path}"
+              break # No need to check more lines for this snapshot, it's already marked for keeping
+            fi
+          fi
+        done
+      fi # End of Condition 1/2 check
+
+      # If, after all checks, it's still a deletion candidate
+      if [[ "$is_deletion_candidate" == "true" ]]; then
+        echo "WOULD delete this snapshot: ${current_snap}"
+        echo "# /sbin/zfs destroy \"${current_snap}\""
+      fi
+
+      prev_snap="$current_snap" # Update prev_snap for the next iteration
+    done # End for current_snap loop
+  done # End for dataset loop
+  echo -e "${BLUE}------------------------------------------------------------${NC}"
+}
+# NEW FUNCTIONALITY SECTION END
+
+function parse_arguments() {
+  # CRUCIAL FIX: Reset OPTIND to 1 before calling getopts.
+  # This ensures getopts always starts parsing from the first argument,
+  # preventing issues where it might skip arguments if OPTIND was previously modified.
+  local OPTIND=1
+  while getopts ":d:f:o:s:rvhc" ARG; do
+    case "$ARG" in 
+      v) # echo "Running -$ARG flag for verbose output"
+         VERBOSE=1 ;;
+      d) #echo "Running -d flag which is a placeholder to pass a dataset path arg ith it"
+         #echo -"$ARG arg is $OPTARG"
+         DATASETPATH=$OPTARG ;;
+      s) # echo "Running -$ARG flag which is a placeholder to pass a snapshot arg with it"
+         # echo "-$ARG arg is $OPTARG" 
+         SNAPREGEX=$OPTARG ;;
+      f) # echo "Running -$ARG flag which is a placeholder to pass a filename arg with it"
+         # echo "-$ARG arg is $OPTARG"
+         FILENAME="${OPTARG}" ;;
+      o) # echo "Running -$ARG flag which is a placeholder to pass another file to also search for"
+         # echo "-$ARG arg is $OPTARG"
+         OTHERFILE=$OPTARG ;;
+      r) 
+         RECURSIVE=1 ;;
+      c)
+         COMPARE=1 ;; 
+      h) help ;;
+      :) echo "argument missing" ;;
+      \?) echo "Something is wrong" ;;
+    esac
+  done
+  
+  # set back $1 index
+  shift "$((OPTIND-1))"
+  
+  #if [[ -z $DATASETPATH ]] || [[ -z $FILENAME ]]; then
+  if [[ -z $DATASETPATH ]]; then
+    echo "You must specify atleast -d , exiting, bye!"
+    help
+    exit 1
+  fi
+
+}
+
+# NEW CODE (new function 'initialize_search_parameters()',)
+function initialize_search_parameters() {
+
+  local splitArr
+
+  # split the FILENAME param, which may come in as a space separated argument value, that will be split into an array for passing to find command using -o -name for each addition, but not the first
+  read -r -a splitArr <<<"$FILENAME"
+  
+  #iterate -f files to build the proper find command for them (appends -o -name for each addtnl)
+  for i in "${!splitArr[@]}"; do
+    if [[ "$i" -eq 0 ]]; then
+      FILESTR="${splitArr[$i]}"
+    else
+      FILESTR+=" -o -name ${splitArr[$i]}"
+    fi
+  done
+  
+  # Discover datasets based on recursive flag, by iterating snapshot paths
+  #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR/*; do
+  #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR; do
+  # Ensure globbing is enabled for 'zfs list' command that populates DATASETS
+  # (it should be by default, but explicitly setting +f here if it was turned off globally)
+  # Ensure globbing is on for zfs list and SNAPREGEX assignment
+  set +f 
+
+  # Explicitly clear the DATASETS array before populating it
+  DATASETS=()
+  
+  #Use a temporary array for robust population, then assign to global DATASETS
+  local -a tmp_datasets
+
+  if [[ $RECURSIVE == 1 ]];  then
+    # assigns the output as a single string to DATASETS, but we prob want an array
+    #DATASETS=$(zfs list -rH -o name ${DATASETPATH%/})
+    # Use array assignment to ensure DATASETS is treated as an array
+    # and handles potential newlines in zfs output robustly.
+    #IFS=$'\n' read -r -d '' -a DATASETS < <(zfs list -rH -o name "${DATASETPATH%/}" | tail -n +2) # Added tail -n +2 to skip header
+    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -rH -o name "${DATASETPATH%/}" 2>/dev/null | tail -n +2)
+    # Populate DATASETS array directly using command substitution and tail to skip header
+    #DATASETS=($(zfs list -rH -o name "${DATASETPATH%/}" | tail -n +2))
+  else
+    #DATASETS=$(zfs list -H -o name ${DATASETPATH%/})
+    # Use array assignment to ensure DATASETS is treated as an array
+    # and handles potential newlines in zfs output robustly.
+    #IFS=$'\n' read -r -d '' -a DATASETS < <(zfs list -H -o name "${DATASETPATH%/}" | tail -n +2) # Added tail -n +2 to skip header
+    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -H -o name "${DATASETPATH%/}" 2>/dev/null | tail -n +2)
+    # Populate DATASETS array directly using command substitution and tail to skip header
+    #DATASETS=($(zfs list -H -o name "${DATASETPATH%/}" | tail -n +2))
+  fi
+  # Assign the temporary array content to the global DATASETS array
+  DATASETS=("${tmp_datasets[@]}")
+  
+  ##
+  # CUSTOM CODE BEGIN
+  # WARNING disabling flie globbing so it doesnt expand into the pathnames when you set them to a var. so if you add any code that needs it reenabled you will either need to process those before this line and set needed data to a var there, or reenable it after this code block
+  set -f
+  # get count of specified datasetpath path depth
+  #DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
+  #DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
+  DSP_CONSTITUENTS_ARR=() # Explicitly initialize as empty array
+  DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
+  DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
+  #echo "dsp constituents arr: ${DSP_CONSTITUENTS_ARR[*]}"
+  # echo "dsp constituents arr cnt: ${#DSP_CONSTITUENTS_ARR[*]}"
+  # count how many trailing asterisks
+  # walk array backwards, using c style
+  for (( idx=${#DSP_CONSTITUENTS_ARR[@]}-1; idx>=0; idx-- ));  do
+    VAL=${DSP_CONSTITUENTS_ARR[$idx]}
+    # echo "id($idx) val:($VAL)"
+    # get id of the last dir before the trailing wildcards (-1 is because it stops on the dir after the last specified folder, subtract that also)
+    TRAILING_WILDCARD_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $idx -1 ))
+    BASE_DSP_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $TRAILING_WILDCARD_CNT ))
+    # stop on last specified folder (first since were reverse sorted array)
+    [[ $VAL != "*" ]] && break
+  done
+  set +f 
+  # CUSTOM CODE END (moved inside a function)
+  ##
+}
+
+
+
+###
+# PROCEDURAL BEGIN
+##
+
+# Ensure globbing is on for ZFS commands and SNAPREGEX comparison
+set +f
+
+# 1. Parse command-line arguments and perform initial validation
+parse_arguments "$@"
+
+/bin/date
+
+# 2. Initialize search parameters (FILESTR, DATASETS, and wildcard counts)
+initialize_search_parameters # Call to the new function, which contains the old lines 377-418
+
+[[ $VERBOSE ]] && echo && echo -e "Gathering file inventory from snapshots based on search pattern: (${RED}$FILESTR${NC})"
+
+for dataset in ${DATASETS[@]}; do
+  # Call the new function to process snapshots for each dataset
+  process_snapshots_for_dataset "$dataset"
+done
+
+##
+# NEW FUNCTIONALITY EXECUTION BEGIN: Call comparison function and cleanup
+# This block runs after the main snapshot iteration loop.
+# If COMPARE mode is active, it calls the comparison function and then exits.
+# It also ensures cleanup of the temporary file used for snapshot results.
+##
+if [[ $COMPARE == 1 ]]; then
+  #compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH"
+  # pass DATASETS array elements directly as separate arguments
+  compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH" "${DATASETS[@]}" # Pass raw_snapshot_file_list_tmp correctly
+  log_snapshot_deltas "$DATASETPATH" "${DATASETS[@]}" # Pass DATASETS array name as a string
+  identify_and_suggest_deletion_candidates "$DATASETPATH" "${DATASETS[@]}" # Pass DATASETS array name as a string
+
+  echo -e "${BLUE}Comparison process complete. Exiting.${NC}"
+  exit 0 # Exit after comparison as the script's main purpose is now fulfilled
+fi
+# NEW FUNCTIONALITY EXECUTION END
+##
+
+# Cleanup the temporary file used to store all snapshot found files (declared globally)
+rm -f "$all_snapshot_files_found_tmp"
+
+echo ...completed.
+
+

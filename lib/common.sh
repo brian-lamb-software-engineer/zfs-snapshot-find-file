@@ -80,6 +80,8 @@ function help(){
   echo '
     #search recursively with verbose, through all datsets snaps, and for all files (short form) (e.g. list all snapshot files)
     snapshots-find-file -d "/pool" -rv'
+  echo
+  echo "Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/')."
   exit 1;
 }
 
@@ -152,10 +154,14 @@ function initialize_search_parameters() {
       FILESTR+=" -o -name ${splitArr[$i]}"
     fi
   done
+  # Normalize dataset filesystem path with leading slash for later filesystem operations
+  DATASETPATH_FS="$DATASETPATH"
+  DATASETPATH_FS="${DATASETPATH_FS#/}"
+  DATASETPATH_FS="/${DATASETPATH_FS}"
 
   # Debugging output for key variables
   [[ $VERBOSE == 1 ]] && echo "Initializing search parameters..."
-  [[ $VERBOSE == 1 ]] && echo "Dataset path: $DATASETPATH"
+  [[ $VERBOSE == 1 ]] && echo "Dataset path: $DATASETPATH_FS"
   [[ $VERBOSE == 1 ]] && echo "File pattern: $FILENAME"
   [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
   [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
@@ -193,14 +199,34 @@ function initialize_search_parameters() {
   # Assign the temporary array content to the global DATASETS array
   DATASETS=("${tmp_datasets[@]}")
 
+  # Normalize and dedupe DATASETS entries to their ZFS-name form (no leading slash).
+  local -a _norm
+  for ds in "${DATASETS[@]}"; do
+    local ds_norm="${ds#/}"
+    ds_norm="${ds_norm%/}"
+    if [[ ! " ${_norm[*]} " =~ " ${ds_norm} " ]]; then
+      _norm+=("${ds_norm}")
+    fi
+  done
+
   # Ensure the specified dataset is included, even if it is a parent dataset
   # This ensures that the parent dataset is processed even without the -r flag
-  if [[ ! " ${DATASETS[*]} " =~ " ${DATASETPATH%/} " ]]; then
-    DATASETS+=("${DATASETPATH%/}")
+  local spec="${DATASETPATH%/}"
+  spec="${spec#/}"
+  if [[ ! " ${_norm[*]} " =~ " ${spec} " ]]; then
+    _norm+=("${spec}")
   fi
 
+  DATASETS=("${_norm[@]}")
+
   # Debugging output for discovered datasets
-  [[ $VERBOSE == 1 ]] && echo "Discovered datasets: ${DATASETS[*]}"
+  if [[ $VERBOSE == 1 ]]; then
+    local -a ds_disp
+    for ds in "${DATASETS[@]}"; do
+      ds_disp+=("/${ds#/}")
+    done
+    echo "Discovered datasets: ${ds_disp[*]}"
+  fi
 
   ##
   # CUSTOM CODE BEGIN

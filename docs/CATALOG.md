@@ -60,3 +60,10 @@ Immediate recommended next outputs (Phase 1 -> deliverable A)
 3. Optional: create a `--test-mode` plan and small fixture harness before refactoring.
 
 Generated: $(date -u)
+
+Recent changes (applied during Phase 1)
+- `lib/common.sh`: added `DATASETPATH_FS` (normalized filesystem path with leading "/"), normalized and deduped `DATASETS`, and improved verbose dataset display to show leading slashes.
+- `lib/zfs-search.sh`: compute both `ds_path` (filesystem path) and `dataset_name` (ZFS name); use `ds_path` for snapshot directory scanning and `dataset_name` for ZFS commands; in non-COMPARE mode, append found file paths into the global temp file so the top-level script can detect matches.
+- `snapshots-find-file`: pass `DATASETPATH_FS` into compare/delta/cleanup functions to ensure filesystem operations use absolute paths.
+
+These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.

@@ -18,8 +18,16 @@ function process_snapshots_for_dataset() {
   # Ensure dataset path does not have trailing slashes
   dataset="${dataset%/}" # Remove trailing slash
 
-  # Debugging output
-  [[ $VERBOSE == 1 ]] && echo "Processing dataset: $dataset"
+  # Compute both filesystem path and ZFS dataset name forms.
+  # `ds_path` is the filesystem-style path (leading slash). `dataset_name` is the ZFS name (no leading slash).
+  local ds_path="$dataset"
+  if [[ "$ds_path" != /* ]]; then
+    ds_path="/$ds_path"
+  fi
+  local dataset_name="${dataset#/}"
+
+  # Debugging output (show both forms)
+  [[ $VERBOSE == 1 ]] && echo "Processing dataset: $dataset_name (path: $ds_path)"
 
   # Debugging output for ZFSSNAPDIR
   [[ $VERBOSE == 1 ]] && echo "Using ZFSSNAPDIR: $ZFSSNAPDIR"
@@ -67,7 +75,7 @@ function process_snapshots_for_dataset() {
 
   # ADDED: Declared snapdirs as local
   # Normalize dataset path to avoid double leading slashes in constructed paths
-  local snapdirs="${dataset%/}/$ZFSSNAPDIR/*"
+  local snapdirs="${ds_path%/}/$ZFSSNAPDIR/*"
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
   local snapshot_found=0
@@ -114,7 +122,7 @@ function process_snapshots_for_dataset() {
     ##
     if [[ $COMPARE == 1 ]]; then
       # ADDED: Declared full_snap_id as local
-      local full_snap_id="${dataset}@${SNAPNAME}"
+      local full_snap_id="${dataset_name}@${SNAPNAME}"
 
       # ADDED: Declared creation_time_epoch as local
       local creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
@@ -125,8 +133,14 @@ function process_snapshots_for_dataset() {
 
     else
       # ADDED: Declared RESULTS as local
-      local RESULTS=$(/bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -exec ls -lh --color=always -g {} \;)
-      [[ ! -z "$RESULTS" ]] && echo "$RESULTS"
+      local RESULTS=$(/bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -exec ls -lh --color=always -g {} \; 2>/dev/null)
+      if [[ ! -z "$RESULTS" ]]; then
+        echo "$RESULTS"
+        # Also append raw file paths to the global temp file so the caller can detect
+        # that files were found when not running in COMPARE mode.
+        /bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -print0 2>/dev/null | \
+          xargs -0 -I {} bash -c 'echo "$1"' _ "{}" >> "$all_snapshot_files_found_tmp"
+      fi
     fi
     ##
     # NEW FUNCTIONALITY MODIFICATION END

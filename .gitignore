@@ -1,3 +1,7 @@
 # adding temp compare log files here
 compare*
 comparison*
+
+#vim files
+*.swo
+*.swp

@@ -1,12 +1,13 @@
 #!/bin/bash
 # Common variables, constants, and utility functions
 
-FILESTR=()
+FILESTR=""
 
 # shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
 FILENAME_ARR=()
+FILEARR=()
 RED='\033[0;31m'
 YELLOW='\033[33m'
 BLUE='\033[0;34m'
@@ -262,32 +263,33 @@ function initialize_search_parameters() {
     printf '%s' "$ds"
   }
 
-  # File pattern builder (moved back from lib/patterns.sh)
-  #
+  # File pattern builder
   # Builds global `FILESTR` from `-f` args.
-  # Preserves original comments and behavior; builds global `FILESTR` used
-  # by the `find` commands across the codebase.
+  # builds global `FILESTR` used by the `find` commands
+  # across the codebase.
   function build_file_pattern() {
     local splitArr
 
-    # split the FILENAME param, which may come in as a space separated argument
+    # Split the FILENAME param, which may come in as a space separated argument
     #  value, that will be split into an array for passing to find command using
     #  -o -name for each addition, but not the first
-    # If the user supplied -f multiple times, use those entries as patterns.
+    # If the user supplied -f multiple times, use those entries as patterns.  
     if [[ ${#FILENAME_ARR[@]} -gt 0 ]]; then
       splitArr=("${FILENAME_ARR[@]}")
     else
       # Backwards compatibility: split the single FILENAME string if no -f array provided
       read -r -a splitArr <<<"$FILENAME"
     fi
-
-    # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)
-    FILESTR=""
+    # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)    FILESTR=""
+    FILEARR=()
     for i in "${!splitArr[@]}"; do
+      local pat="${splitArr[$i]}"
       if [[ "$i" -eq 0 ]]; then
-        FILESTR="${splitArr[$i]}"
+        FILEARR+=(-name "$pat")
+        FILESTR="-name $pat"
       else
-        FILESTR+=" -o -name ${splitArr[$i]}"
+        FILEARR+=(-o -name "$pat")
+        FILESTR+=" -o -name $pat"
       fi
     done
   }

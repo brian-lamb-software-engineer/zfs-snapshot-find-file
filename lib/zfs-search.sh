@@ -128,18 +128,19 @@ function process_snapshots_for_dataset() {
       local creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
 
       # Output format: live_equivalent_path|snapshot_name|creation_time_epoch
-      /bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -print0 2>/dev/null | \
-      # shellcheck disable=SC2016
-      xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
-      # shellcheck enable=SC2016
+      /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
+        # shellcheck disable=SC2016
+        xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+        # shellcheck enable=SC2016
     else
       # ADDED: Declared RESULTS as local
-      local RESULTS=$(/bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -exec ls -lh --color=always -g {} \; 2>/dev/null)
+      local RESULTS
+      RESULTS=$(/bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -exec ls -lh --color=always -g {} \; 2>/dev/null)
       if [[ ! -z "$RESULTS" ]]; then
         echo "$RESULTS"
         # Also append raw file paths to the global temp file so the caller can detect
         # that files were found when not running in COMPARE mode.
-        /bin/sudo /bin/find "$snappath" -type f \( -name "$FILESTR" \) -print0 2>/dev/null | \
+        /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
           # shellcheck disable=SC2016
           xargs -0 -I {} bash -c 'echo "$1"' _ "{}" >> "$all_snapshot_files_found_tmp"
           # shellcheck enable=SC2016

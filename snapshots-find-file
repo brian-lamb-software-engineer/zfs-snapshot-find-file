@@ -1,5 +1,14 @@
 #!/bin/bash
-SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# source libraries from the script's directory ---
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/zfs-search.sh"
 source "$SCRIPT_DIR/lib/zfs-compare.sh"
@@ -11,6 +20,11 @@ parse_arguments "$@"
 initialize_search_parameters
 
 [[ $VERBOSE ]] && echo && echo -e "Gathering file inventory from snapshots based on search pattern: (${RED}$FILESTR${NC})"
+
+if [[ ${#DATASETS[@]} -eq 0 ]]; then
+  echo -e "${YELLOW}No datasets found. Did you mean to include child datasets? Use the -r flag for recursive search.${NC}"
+  exit 1
+fi
 
 for dataset in ${DATASETS[@]}; do
   process_snapshots_for_dataset "$dataset"
@@ -24,5 +38,11 @@ if [[ $COMPARE == 1 ]]; then
   exit 0
 fi
 
+# Notify the user if no files were found
+if [[ ! -s "$all_snapshot_files_found_tmp" ]]; then
+  echo -e "${YELLOW}No files found matching the specified criteria in the dataset(s).${NC}"
+fi
+
 rm -f "$all_snapshot_files_found_tmp"
 echo ...completed.
+

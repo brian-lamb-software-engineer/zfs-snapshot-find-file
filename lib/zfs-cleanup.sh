@@ -11,7 +11,7 @@ function identify_and_suggest_deletion_candidates() {
     return # Exit function if no datasets to process
   fi
 
-  echo -e "\n${BLUE}--- Identifying Snapshot Deletion Candidates ---${NC}"
+  echo -e "\n${RED}--- Identifying Snapshot Deletion Candidates ---${NC}"
   echo -e "Snapshots are suggested for deletion if they do NOT contain:\n" \
           "  1. Important files that have been deleted from the live filesystem (unignored '-' diffs to live).\n" \
           "  AND\n" \
@@ -21,7 +21,7 @@ function identify_and_suggest_deletion_candidates() {
 
   # New section for potentially accidentally deleted files (unignored '-' to live)
   # These are files you care about, so the snapshot holding them should NOT be deleted.
-  echo -e "\n${BLUE}--- Potentially Accidentally Deleted Files Found ---${NC}"
+  echo -e "\n${RED}--- Potentially Accidentally Deleted Files Found ---${NC}"
   echo -e "The following files exist in a snapshot but have been deleted from the live filesystem."
   echo -e "Snapshots containing these files (if unignored) WILL NOT be suggested for deletion.\n"
   echo "Snapshot,File_Path,Live_Dataset_Path" # CSV header for this section
@@ -81,7 +81,7 @@ function identify_and_suggest_deletion_candidates() {
   fi
   echo -e "${BLUE}------------------------------------------------------------${NC}"
 
-  echo -e "\n${BLUE}--- Snapshots Suggested for Deletion ---${NC}"
+  echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
 
   # --- PHASE 2: Determine Actual Deletion Candidates ---
   for dataset in "${datasets_array[@]}"; do

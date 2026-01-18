@@ -76,7 +76,7 @@ function compare_snapshot_files_to_live_dataset() {
           # Check if the live_equivalent_path exists in our list of live files
           # Using grep -Fxq for exact string match and quiet output.
           if ! grep -Fxq "$live_equivalent_path" "$live_files_tmp"; then
-              echo "$live_equivalent_path (found in newest snapshot: $snap_name)" | tee -a "$log_file"
+              echo "$live_equivalent_path (found in newest snapshot: [$snap_name] )" | tee -a "$log_file"
               echo "$live_equivalent_path" >> "$seen_paths_tmp" # Mark as seen
               ((missing_files_count++))
           fi
@@ -85,10 +85,12 @@ function compare_snapshot_files_to_live_dataset() {
 
   echo "" >> "$ignored_log_file"
   echo "Ignored files cataloging finished." >> "$ignored_log_file"
-  echo -e "${YELLOW}Total files skipped (already reported): $skipped_reported_files_count${NC}" | tee -a "$log_file"
+  #TODO figure out why the message below says "already reported" then clarify that reasonor fix it
+  # make it say 0 if its zero, right now i see an empty string ($skipped_reported)
+  echo -e "${YELLOW}Total files skipped (already reported): [$skipped_reported_files_count] ${NC}" | tee -a "$log_file"
   echo "" | tee -a "$log_file"
   echo "------------------------------------------------------------" | tee -a "$log_file"
-  echo "Comparison finished. Total missing files found: $missing_files_count" | tee -a "$log_file"
+  echo "Comparison finished. Total missing files found: [$missing_files_count] " | tee -a "$log_file"
 
   # Cleanup temporary files
   rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"

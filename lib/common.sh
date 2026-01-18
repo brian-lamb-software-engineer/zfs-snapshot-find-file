@@ -36,21 +36,21 @@ DATASETS=() # Will store the list of datasets to iterate
 function help(){
   echo
   echo "A ZFS snapshot search tool.
-    - Uses a constructed 'find' command to search in specified(or all) snaps, for specified file, recursively.
-    - Has the ability to search for multiple or all snaps in a given dataset by using wildcard.
-    - Has the ability to search file names by wildcard and maybe other regex calls
-    - Has the ability to search for multiple files in the same run by specifying multiple files (faster than running multiple times).
-    - Has the ability to search in child datasets snaps(all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc..
+    - Uses a constructed 'find' command to search in specified snapshot for specified file, recursively by default.
+    - Has the ability to search through multiple or all "snapshots" in a given dataset by using wildcard.
+    - Has the ability to search for "files" (in snapshots) by wildcard, and maybe other regex calls
+    - Has the ability to search for multiple files in the same run by specifying multiple (space separated) files (it's faster than running multiple times).
+    - Has the ability to search in child datasets snapshots (all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc..
     "
   echo "USAGE:
     snapshots-find-file
-    -c (compare snapshot files to live dataset files to find missing ones)
-    -d <dataset-path to search through>,
-    -f <file-your-searching-for another-file> (multiple space separated allowed),
-    -o <other-file-your-searching--for>
-    -s <snapshot-name-regex-term>,
-    -r (recursively search into child datasets)
-    -v (verbose output),
+    -d (required) <dataset-path to search through> 
+    -c (optional) (compare snapshot files to live dataset files to find missing ones) (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
+    -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed) 
+    -o (optional) <other-file-your-searching--for>
+    -s (optional) <snapshot-name-regex-term> (will search all if not specified)
+    -r (optional) (recursively search into child datasets)
+    -v (optional) (verbose output)
     -h (this help)
     "
   echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
@@ -116,23 +116,28 @@ function parse_arguments() {
   # set back $1 index
   shift "$((OPTIND-1))"
 
-  #if [[ -z $DATASETPATH ]] || [[ -z $FILENAME ]]; then
   if [[ -z $DATASETPATH ]]; then
-    echo "You must specify atleast -d , exiting, bye!"
+    echo "You must specify at least -d, exiting, bye!"
     help
     exit 1
   fi
 
+  # Warn the user if neither -f nor -s is provided
+  if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAPREGEX ]]; then
+    echo -e "${YELLOW}No file pattern (-f) or snapshot regex (-s) specified. Defaulting to search for all files (*).${NC}"
+  fi
 }
 
 function initialize_search_parameters() {
 
   local splitArr
 
-  # split the FILENAME param, which may come in as a space separated argument value, that will be split into an array for passing to find command using -o -name for each addition, but not the first
+  # split the FILENAME param, which may come in as a space separated argument 
+  #  value, that will be split into an array for passing to find command using
+  #  -o -name for each addition, but not the first
   read -r -a splitArr <<<"$FILENAME"
 
-  #iterate -f files to build the proper find command for them (appends -o -name for each addtnl)
+  # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)
   for i in "${!splitArr[@]}"; do
     if [[ "$i" -eq 0 ]]; then
       FILESTR="${splitArr[$i]}"
@@ -141,18 +146,25 @@ function initialize_search_parameters() {
     fi
   done
 
+  # Debugging output for key variables
+  [[ $VERBOSE == 1 ]] && echo "Initializing search parameters..."
+  [[ $VERBOSE == 1 ]] && echo "Dataset path: $DATASETPATH"
+  [[ $VERBOSE == 1 ]] && echo "File pattern: $FILENAME"
+  [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
+  [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
+
   # Discover datasets based on recursive flag, by iterating snapshot paths
   #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR/*; do
   #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR; do
   # Ensure globbing is enabled for 'zfs list' command that populates DATASETS
   # (it should be by default, but explicitly setting +f here if it was turned off globally)
-  # Ensure globbing is on for zfs list and SNAPREGEX assignment
   set +f
 
-  # Explicitly clear the DATASETS array before populating it
+   # Explicitly clear the DATASETS array before populating it
   DATASETS=()
 
-  #Use a temporary array for robust population, then assign to global DATASETS
+
+  # Use a temporary array for robust population, then assign to global DATASETS
   local -a tmp_datasets
 
   if [[ $RECURSIVE == 1 ]];  then
@@ -165,20 +177,30 @@ function initialize_search_parameters() {
     # Populate DATASETS array directly using command substitution and tail to skip header
     #DATASETS=($(zfs list -rH -o name "${DATASETPATH%/}" | tail -n +2))
   else
-    #DATASETS=$(zfs list -H -o name ${DATASETPATH%/})
-    # Use array assignment to ensure DATASETS is treated as an array
-    # and handles potential newlines in zfs output robustly.
-    #IFS=$'\n' read -r -d '' -a DATASETS < <(zfs list -H -o name "${DATASETPATH%/}" | tail -n +2) # Added tail -n +2 to skip header
-    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -H -o name "${DATASETPATH%/}" 2>/dev/null | tail -n +2)
+    # Include only the specified dataset
+    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -H -o name "${DATASETPATH%/}" 2>/dev/null)
     # Populate DATASETS array directly using command substitution and tail to skip header
     #DATASETS=($(zfs list -H -o name "${DATASETPATH%/}" | tail -n +2))
   fi
+
   # Assign the temporary array content to the global DATASETS array
   DATASETS=("${tmp_datasets[@]}")
 
+  # Ensure the specified dataset is included, even if it is a parent dataset
+  # This ensures that the parent dataset is processed even without the -r flag
+  if [[ ! " ${DATASETS[*]} " =~ " ${DATASETPATH%/} " ]]; then
+    DATASETS+=("${DATASETPATH%/}")
+  fi
+
+  # Debugging output for discovered datasets
+  [[ $VERBOSE == 1 ]] && echo "Discovered datasets: ${DATASETS[*]}"
+
   ##
   # CUSTOM CODE BEGIN
-  # WARNING disabling flie globbing so it doesnt expand into the pathnames when you set them to a var. so if you add any code that needs it reenabled you will either need to process those before this line and set needed data to a var there, or reenable it after this code block
+  # WARNING disabling file globbing so it doesn't expand into the pathnames when 
+  #   you set them to a var. If you add any code that needs it reenabled, you
+  #   will either need to process those before this line and set needed data to 
+  #   a var there, or reenable it after this code block
   set -f
   # get count of specified datasetpath path depth
   #DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
@@ -186,17 +208,18 @@ function initialize_search_parameters() {
   DSP_CONSTITUENTS_ARR=() # Explicitly initialize as empty array
   DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
   DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
-  #echo "dsp constituents arr: ${DSP_CONSTITUENTS_ARR[*]}"
+  # echo "dsp constituents arr: ${DSP_CONSTITUENTS_ARR[*]}"
   # echo "dsp constituents arr cnt: ${#DSP_CONSTITUENTS_ARR[*]}"
   # count how many trailing asterisks
   # walk array backwards, using c style
   for (( idx=${#DSP_CONSTITUENTS_ARR[@]}-1; idx>=0; idx-- ));  do
     VAL=${DSP_CONSTITUENTS_ARR[$idx]}
     # echo "id($idx) val:($VAL)"
-    # get id of the last dir before the trailing wildcards (-1 is because it stops on the dir after the last specified folder, subtract that also)
+    # get id of the last dir before the trailing wildcards (-1 is because it stops
+    #   on the dir after the last specified folder, subtract that also)
     TRAILING_WILDCARD_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $idx -1 ))
     BASE_DSP_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $TRAILING_WILDCARD_CNT ))
-    # stop on last specified folder (first since were reverse sorted array)
+    # stop on last specified folder (first since we're reverse sorted array)
     [[ $VAL != "*" ]] && break
   done
   set +f

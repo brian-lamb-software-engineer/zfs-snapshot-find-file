@@ -1,11 +1,5 @@
 # Code Catalog — functions and TODOs
 
-Summary (line counts)
-- `lib/common.sh`: 203 lines
-- `lib/zfs-search.sh`: 122 lines
-- `lib/zfs-compare.sh`: 184 lines
-- `lib/zfs-cleanup.sh`: 136 lines
-
 Function map (file -> function -> start..end (count))
 
 - lib/common.sh (203 lines)

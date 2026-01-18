@@ -10,7 +10,6 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 # source libraries from the script's directory ---
 source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/datasets.sh"
 source "$SCRIPT_DIR/lib/zfs-search.sh"
 source "$SCRIPT_DIR/lib/zfs-compare.sh"
 source "$SCRIPT_DIR/lib/zfs-cleanup.sh"

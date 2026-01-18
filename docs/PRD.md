@@ -55,6 +55,10 @@ Proposed next steps (Phase 2 — after catalog approval)
 4. Create a branch `feature/refactor-modularize` and open a PR with focused commits (one commit per function extraction).
 5. Add lightweight tests and `shellcheck` fixes; run and verify on Linux.
 
+additional items needed
+1. for a path instead of file is specified for search, this needs to be implemented.  e.g. in a dataset there is a path of files -d "/nas/real-dataset" files serching for wanted to be /nas/real-dataset/users/brian/Documents .  if i user wants to just search inside a subpath (Documents) only in that dataset, it cant be specified in the -d line, beacuse output is that dataset doesnt exist, and if you specify this path in files, e.g. -f documents, or -f "users/brian/Documents" it wont work either.  
+
+
 Recommendations (no changes in Phase 1)
 - Add a `--test-mode` or fixture-driven mode and a `--dry-run` flag in Phase 2 before any operations that might modify snapshots.
 - Add `shellcheck` linting and a minimal CI check for future refactors.

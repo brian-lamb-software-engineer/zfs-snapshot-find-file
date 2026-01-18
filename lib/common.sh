@@ -5,6 +5,7 @@ FILESTR=()
 
 ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
+FILENAME_ARR=()
 RED='\033[0;31m'
 YELLOW='\033[33m'
 BLUE='\033[0;34m'
@@ -98,8 +99,8 @@ function parse_arguments() {
          # echo "-$ARG arg is $OPTARG"
          SNAPREGEX=$OPTARG ;;
       f) # echo "Running -$ARG flag which is a placeholder to pass a filename arg with it"
-         # echo "-$ARG arg is $OPTARG"
-         FILENAME="${OPTARG}" ;;
+        # echo "-$ARG arg is $OPTARG"
+        FILENAME_ARR+=("${OPTARG}") ;;
       o) # echo "Running -$ARG flag which is a placeholder to pass another file to also search for"
          # echo "-$ARG arg is $OPTARG"
          OTHERFILE=$OPTARG ;;
@@ -135,7 +136,13 @@ function initialize_search_parameters() {
   # split the FILENAME param, which may come in as a space separated argument 
   #  value, that will be split into an array for passing to find command using
   #  -o -name for each addition, but not the first
-  read -r -a splitArr <<<"$FILENAME"
+  # If the user supplied -f multiple times, use those entries as patterns.
+  if [[ ${#FILENAME_ARR[@]} -gt 0 ]]; then
+    splitArr=("${FILENAME_ARR[@]}")
+  else
+    # Backwards compatibility: split the single FILENAME string if no -f array provided
+    read -r -a splitArr <<<"$FILENAME"
+  fi
 
   # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)
   for i in "${!splitArr[@]}"; do

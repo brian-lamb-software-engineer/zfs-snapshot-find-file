@@ -66,8 +66,8 @@ function process_snapshots_for_dataset() {
   set +f
 
   # ADDED: Declared snapdirs as local
-  #TODO look to if the first forward slash here is needed, because its coming up as double forward slash on $snapdirs value
-  local snapdirs="/$dataset/$ZFSSNAPDIR/*"
+  # Normalize dataset path to avoid double leading slashes in constructed paths
+  local snapdirs="${dataset%/}/$ZFSSNAPDIR/*"
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
   local snapshot_found=0

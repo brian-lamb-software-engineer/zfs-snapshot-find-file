@@ -22,7 +22,8 @@ function compare_snapshot_files_to_live_dataset() {
   echo "------------------------------------------------------------" >> "$log_file"
 
   # Temporary file to store paths of files in the live dataset
-  local live_files_tmp=$(mktemp)
+  local live_files_tmp
+  live_files_tmp=$(mktemp)
 
   # 1. Get all files in the current live dataset
   [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Gathering live dataset files from: $live_dataset_path${NC}"
@@ -30,21 +31,26 @@ function compare_snapshot_files_to_live_dataset() {
   # Using -print0 and xargs -0 for robust handling of special characters in filenames.
   #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
   #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$1"' _ "{}" > "$live_files_tmp"\
+  # shellcheck disable=SC2016
   /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
+  # shellcheck enable=SC2016
 
   [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Live dataset file count: $(wc -l < "$live_files_tmp")${NC}"
 
   local missing_files_count=0
   # Temporary file to track paths already reported to avoid duplicates in main log
-  local seen_paths_tmp=$(mktemp)
+  local seen_paths_tmp
+  seen_paths_tmp=$(mktemp)
   # Temporary file to track unique ignored paths for the ignored_log_file
-  local seen_ignored_paths_tmp=$(mktemp)
+  local seen_ignored_paths_tmp
+  seen_ignored_paths_tmp=$(mktemp)
 
   # Sort the raw snapshot file list by live_equivalent_path then by creation_timestamp (NEWEST first)
   # This ensures that when a path is encountered, it's the one from the newest snapshot.
   # Using | as delimiter for sort. -k1,1 ensures sorting on the first field (path),
   # -k3,3nr on the third field (timestamp) numerically in reverse (newest first).
-  local sorted_snapshot_files_tmp=$(mktemp)
+  local sorted_snapshot_files_tmp
+  sorted_snapshot_files_tmp=$(mktemp)
   cat "$raw_snapshot_file_list_tmp" | sort -t'|' -k1,1 -k3,3nr > "$sorted_snapshot_files_tmp"
 
   # Read sorted snapshot file paths (path|snap_name|timestamp)
@@ -52,9 +58,9 @@ function compare_snapshot_files_to_live_dataset() {
   while IFS='|' read -r live_equivalent_path snap_name creation_time_epoch || [[ -n "$live_equivalent_path" ]]; do
       # Check if this exact path has already been processed and reported
       if grep -Fxq "$live_equivalent_path" "$seen_paths_tmp"; then
-         # [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Skipping (already reported): $live_equivalent_path (from snapshot: $snap_name, timestamp: $creation_time_epoch)${NC}"
-          ((skipped_reported_files_count++)) # Increment skip counter
-          continue # Skip if already seen
+        # [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Skipping (already reported): $live_equivalent_path (from snapshot: $snap_name, timestamp: $creation_time_epoch)${NC}"
+        ((skipped_reported_files_count++)) # Increment skip counter
+        continue # Skip if already seen
       fi
 
       # Check against the ignore list first
@@ -96,7 +102,6 @@ function compare_snapshot_files_to_live_dataset() {
   rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
 
 }
-
 
 function log_snapshot_deltas() {
   local dataset_path="$1"
@@ -213,4 +218,3 @@ function log_snapshot_deltas() {
   done
   echo "\nDelta analysis finished." >> "$delta_log_file"
 }
-

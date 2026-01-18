@@ -3,6 +3,7 @@
 
 FILESTR=()
 
+# shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
 FILENAME_ARR=()
@@ -11,17 +12,21 @@ YELLOW='\033[33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
-
+# Example 1: Ignore cache directories
+# Example 2: Ignore temporary directories
+# Example 3: Ignore macOS specific files
+# Example 4: Ignore Windows specific thumbnail files
 IGNORE_REGEX_PATTERNS=(
-  "^.*\.cache/.*$" # Example 1: Ignore cache directories
-  "^.*/tmp/.*$" # Example 2: Ignore temporary directories
-  "^.*/\.DS_Store$" # Example 3: Ignore macOS specific files
-  "^.*/thumbs\.db$" # Example 4: Ignore Windows specific thumbnail files
+  "^.*\.cache/.*$" 
+  "^.*/tmp/.*$"
+  "^.*/\.DS_Store$"
+  "^.*/thumbs\.db$"
 )
 
 all_snapshot_files_found_tmp=$(mktemp)
 
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+# shellcheck enable=SC2034
 
 DATASETPATH=""
 SNAPREGEX=""
@@ -175,8 +180,8 @@ function initialize_search_parameters() {
     # echo "id($idx) val:($VAL)"
     # get id of the last dir before the trailing wildcards (-1 is because it stops
     #   on the dir after the last specified folder, subtract that also)
-    TRAILING_WILDCARD_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $idx -1 ))
-    BASE_DSP_CNT=$(( $DSP_CONSTITUENTS_ARR_CNT - $TRAILING_WILDCARD_CNT ))
+    TRAILING_WILDCARD_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - idx - 1 ))
+    BASE_DSP_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - TRAILING_WILDCARD_CNT ))
     # stop on last specified folder (first since we're reverse sorted array)
     [[ $VAL != "*" ]] && break
   done
@@ -221,7 +226,7 @@ function initialize_search_parameters() {
     for ds in "${DATASETS[@]}"; do
       local ds_norm="${ds#/}"
       ds_norm="${ds_norm%/}"
-      if [[ ! " ${_norm[*]} " =~ " ${ds_norm} " ]]; then
+      if [[ ! " ${_norm[*]} " =~ ${ds_norm} ]]; then
         _norm+=("${ds_norm}")
       fi
     done
@@ -230,7 +235,7 @@ function initialize_search_parameters() {
     # This ensures that the parent dataset is processed even without the -r flag
     local spec="${datasetpath%/}"
     spec="${spec#/}"
-    if [[ ! " ${_norm[*]} " =~ " ${spec} " ]]; then
+    if [[ ! " ${_norm[*]} " =~ ${spec} ]]; then
       _norm+=("${spec}")
     fi
 

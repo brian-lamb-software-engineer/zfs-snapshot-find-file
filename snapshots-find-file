@@ -9,6 +9,10 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 # source libraries from the script's directory ---
+# shellcheck source=lib/common.sh
+# shellcheck source=lib/zfs-search.sh
+# shellcheck source=lib/zfs-compare.sh
+# shellcheck source=lib/zfs-cleanup.sh
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/zfs-search.sh"
 source "$SCRIPT_DIR/lib/zfs-compare.sh"
@@ -26,12 +30,14 @@ if [[ ${#DATASETS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-for dataset in ${DATASETS[@]}; do
+for dataset in "${DATASETS[@]}"; do
   process_snapshots_for_dataset "$dataset"
 done
 
 if [[ $COMPARE == 1 ]]; then
+  # shellcheck disable=SC2154
   compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH_FS" "${DATASETS[@]}"
+  # shellcheck enable=SC2154
   log_snapshot_deltas "$DATASETPATH_FS" "${DATASETS[@]}"
   identify_and_suggest_deletion_candidates "$DATASETPATH_FS" "${DATASETS[@]}"
   echo -e "${BLUE}Comparison process complete. Exiting.${NC}"
@@ -45,4 +51,3 @@ fi
 
 rm -f "$all_snapshot_files_found_tmp"
 echo ...completed.
-

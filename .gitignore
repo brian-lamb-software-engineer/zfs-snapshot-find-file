@@ -5,3 +5,7 @@ comparison*
 #vim files
 *.swo
 *.swp
+
+#VSCODE
+.vscode
+vscode-workspace

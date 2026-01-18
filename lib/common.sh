@@ -260,6 +260,8 @@ function initialize_search_parameters() {
   # File pattern builder (moved back from lib/patterns.sh)
   #
   # Builds global `FILESTR` from `-f` args.
+  # Preserves original comments and behavior; builds global `FILESTR` used
+  # by the `find` commands across the codebase.
   function build_file_pattern() {
     local splitArr
 

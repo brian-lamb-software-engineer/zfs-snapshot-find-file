@@ -12,3 +12,6 @@ Libraries:
 Docs:
 - PRD.md - product requirements document, which contains project details
 - CATALOG.md - function maps, and mroe details on file contents
+
+AGENT: do not run git add/commit/push; present commit message only.
+AGENT: keep original comments and placement when moving code.

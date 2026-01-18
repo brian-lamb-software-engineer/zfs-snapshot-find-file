@@ -87,4 +87,3 @@ ADDED NEW FUNCTIONS TO ZFS-SEARCH
 - added `process_snapshots_for_dataset()` improvements
 - fixed xargs quoting for compare mode
 - updated temporary file handling
-

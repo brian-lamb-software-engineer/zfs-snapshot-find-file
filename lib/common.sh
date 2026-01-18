@@ -166,67 +166,9 @@ function initialize_search_parameters() {
   [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
   [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
 
-  # Discover datasets based on recursive flag, by iterating snapshot paths
-  #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR/*; do
-  #for snappath in ${DATASETPATH%/}/$ZFSSNAPDIR; do
-  # Ensure globbing is enabled for 'zfs list' command that populates DATASETS
-  # (it should be by default, but explicitly setting +f here if it was turned off globally)
-  set +f
-
-   # Explicitly clear the DATASETS array before populating it
-  DATASETS=()
-
-
-  # Use a temporary array for robust population, then assign to global DATASETS
-  local -a tmp_datasets
-
-  if [[ $RECURSIVE == 1 ]];  then
-    # assigns the output as a single string to DATASETS, but we prob want an array
-    #DATASETS=$(zfs list -rH -o name ${DATASETPATH%/})
-    # Use array assignment to ensure DATASETS is treated as an array
-    # and handles potential newlines in zfs output robustly.
-    #IFS=$'\n' read -r -d '' -a DATASETS < <(zfs list -rH -o name "${DATASETPATH%/}" | tail -n +2) # Added tail -n +2 to skip header
-    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -rH -o name "${DATASETPATH%/}" 2>/dev/null | tail -n +2)
-    # Populate DATASETS array directly using command substitution and tail to skip header
-    #DATASETS=($(zfs list -rH -o name "${DATASETPATH%/}" | tail -n +2))
-  else
-    # Include only the specified dataset
-    IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -H -o name "${DATASETPATH%/}" 2>/dev/null)
-    # Populate DATASETS array directly using command substitution and tail to skip header
-    #DATASETS=($(zfs list -H -o name "${DATASETPATH%/}" | tail -n +2))
-  fi
-
-  # Assign the temporary array content to the global DATASETS array
-  DATASETS=("${tmp_datasets[@]}")
-
-  # Normalize and dedupe DATASETS entries to their ZFS-name form (no leading slash).
-  local -a _norm
-  for ds in "${DATASETS[@]}"; do
-    local ds_norm="${ds#/}"
-    ds_norm="${ds_norm%/}"
-    if [[ ! " ${_norm[*]} " =~ " ${ds_norm} " ]]; then
-      _norm+=("${ds_norm}")
-    fi
-  done
-
-  # Ensure the specified dataset is included, even if it is a parent dataset
-  # This ensures that the parent dataset is processed even without the -r flag
-  local spec="${DATASETPATH%/}"
-  spec="${spec#/}"
-  if [[ ! " ${_norm[*]} " =~ " ${spec} " ]]; then
-    _norm+=("${spec}")
-  fi
-
-  DATASETS=("${_norm[@]}")
-
-  # Debugging output for discovered datasets
-  if [[ $VERBOSE == 1 ]]; then
-    local -a ds_disp
-    for ds in "${DATASETS[@]}"; do
-      ds_disp+=("/${ds#/}")
-    done
-    echo "Discovered datasets: ${ds_disp[*]}"
-  fi
+  # Discover datasets based on recursive flag, by delegating to helper
+  # (moved to `lib/datasets.sh` as `discover_datasets()`)
+  discover_datasets "$DATASETPATH" "$RECURSIVE"
 
   ##
   # CUSTOM CODE BEGIN

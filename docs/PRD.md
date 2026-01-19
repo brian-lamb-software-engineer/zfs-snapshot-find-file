@@ -3,6 +3,8 @@
 Purpose
 - Reduce wasted space from ZFS snapshots by identifying redundant snapshots and suggesting safe deletions.
 - Detect potentially accidentally deleted files on live datasets by comparing live dataset contents to snapshot contents.
+- If you see functions that are >60 lines, break them out.  
+- When breaking out functions, if you see pieces in that function that are being called from multiple places, break that piece out to its own function, and place it on common.sh, then call it, instead of its code from those multiple places. 
 
 Scope (Phase 1)
 - Catalog and inspect the current codebase split across `snapshots-find-file` ("sff") and `lib/*.sh`.

@@ -42,141 +42,135 @@ function _handle_noncompare_snapdir() {
   rm -f "$found_tmp"
 }
 
-function process_snapshots_for_dataset() {
+# Helpers to break up process_snapshots_for_dataset for Phase 2
+function _normalize_dataset() {
+  # Args: dataset
   local dataset="$1"
-
-  # Ensure dataset path does not have trailing slashes
-  dataset="${dataset%/}" # Remove trailing slash
-
-  # Compute both filesystem path and ZFS dataset name forms.
-  # `ds_path` is the filesystem-style path (leading slash). `dataset_name` is the ZFS name (no leading slash).
+  dataset="${dataset%/}"
   local ds_path="$dataset"
   if [[ "$ds_path" != /* ]]; then
     ds_path="/$ds_path"
   fi
   local dataset_name="${dataset#/}"
+  printf '%s|%s' "$ds_path" "$dataset_name"
+}
 
-  # Debugging output (show both forms)
-  [[ $VERBOSE == 1 ]] && echo "Processing dataset: $dataset_name (path: $ds_path)"
-
-  # Debugging output for ZFSSNAPDIR
-  [[ $VERBOSE == 1 ]] && echo "Using ZFSSNAPDIR: $ZFSSNAPDIR"
-
-  ##
-  # CUSTOM CODE CONTINUE BEGIN
-  # Manipulate dataset results since when using trailing wildcards zfs list returns not 
-  #   just the ones that match the wildcards, the ones above them up to the specified one 
-  #   before the wildcard.  e.g. /pool/data/set/*/*/ will return /pool/data/set, 
-  #   /pool/data/set/1, but we would only expect to be searching only the childs, e.g. 
-  #   /pool/data/set/1/a, and maybe another /pool/data/set/1/b.
-  # Since trailing wildcards were defined, lets strip the datasets that come before the 
-  #   wildcard, from zfs list results to refine the datasets.
-  # This logic manipulates dataset results when using trailing wildcards.
+function _should_skip_for_trailing_wildcard() {
+  # Args: dataset
+  # Returns 0 = keep processing, 1 = skip (return from caller)
+  local dataset="$1"
   if [[ ! -z "$TRAILING_WILDCARD_CNT" ]] && [[ "$TRAILING_WILDCARD_CNT" -gt 0 ]]; then
-    # ADDED: Declared DS_CONST_ARR as local and used robust read -a
     local DS_CONST_ARR
-    IFS=$'\n' read -r -d '' -a DS_CONST_ARR < <(echo "$dataset" | tr '/' '\n')
-    # ADDED: Declared DS_CONST_ARR_CNT as local
+    IFS=$'\n' read -r -d '' -a DS_CONST_ARR < <(echo "$dataset" | tr '/' '\n') || true
     local DS_CONST_ARR_CNT=${#DS_CONST_ARR[@]}
-
-    # echo trailing wildcard count = $TRAILING_WILDCARD_CNT
-    # echo base dataset path count = $BASE_DSP_CNT
-    # Strip dataset dirs off DSP_CONSTITUENTS_ARR that are less than the specified 
-    #   wildcard paths (because zfs list just returns them all when wildcard specified).
-
-    # Get count of this dataset's specified path depth
-    # echo "DS_CONST_ARR: ${DS_CONST_ARR[@]}"
-    # echo "DS_CONST_ARR_CNT: $DS_CONST_ARR_CNT"
-
-    # If this zfs list result dataset path depth count is less than or equal to depth 
-    #   count of the total elements in specified path then skip it.
-    # MODIFIED: Changed 'continue' to 'return' to exit function for this dataset.
     if [[ "$DS_CONST_ARR_CNT" -le "$BASE_DSP_CNT" ]]; then
       [[ $VERBOSE == 1  ]] && echo -e "Skipping dataset (too high in hierarchy for trailing wildcards): ${dataset}"
-      return # Exit the function for this dataset
+      return 1
     fi
     [[ $VERBOSE == 1  ]] && echo && echo -e "Searching Dataset:(${PURPLE}$dataset${NC})"
   fi
+  return 0
+}
+
+function _build_snapdirs() {
+  # Args: ds_path
+  local ds_path="$1"
+  local snapdirs="${ds_path%/}/$ZFSSNAPDIR/*"
+  printf '%s' "$snapdirs"
+}
+
+function _matches_snapshot_regex() {
+  # Args: SNAPNAME
+  local SNAPNAME="$1"
+  local regex_pattern
+  if [[ "$SNAPREGEX" == "*" ]]; then
+    regex_pattern=".*"
+  else
+    regex_pattern="$(printf '%s' "$SNAPREGEX" | sed -e 's/[][\.^$*+?(){}|]/\\&/g' -e 's/\*/.*/g' -e 's/?/./g')"
+    regex_pattern=".*$regex_pattern.*"
+  fi
+  if [[ ! "$SNAPNAME" =~ $regex_pattern ]]; then
+    return 1
+  fi
+  return 0
+}
+
+function _process_snappath() {
+  # Args: snappath dataset ds_path dataset_name
+  local snappath="$1"; shift
+  local dataset="$1"; shift
+  local ds_path="$1"; shift
+  local dataset_name="$1"; shift
+
+  if [[ ! -d "$snappath" ]]; then
+    [[ $VERBOSE == 1 ]] && echo -e "(${YELLOW}No Snapshots found in this dataset${NC})"
+    return 0
+  fi
+
+  local SNAPNAME=$(/bin/basename "$snappath")
+  [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "Skipping symlink: ${snappath}" && return 0
+
+  [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${YELLOW}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
+
+  if ! _matches_snapshot_regex "$SNAPNAME"; then
+    [[ $VERBOSE == 1 ]] && echo "Skipping, doesn't match -s regex"
+    return 0
+  fi
+
+  [[ $VERBOSE == 1 ]] && echo -e "Search path:(${BLUE}$snappath${NC})"
+
+  ##
+  # NEW FUNCTIONALITY MODIFICATION BEGIN: Conditional find command execution & bugfix
+  # This block ensures 'local' declarations and 'zfs get' are performed only
+  # when in COMPARE mode,
+  # It also corrects the 'zfs get' commands target and the 'xargs' arg passing for accurate path construction.
   ##
 
-  # Ensure globbing is enabled for processing snapshot directories
-  # This is necessary for the SNAPREGEX comparison and glob expansion.
-  set +f
+  if [[ $COMPARE == 1 ]]; then
+    local SNAPNAME_local="$SNAPNAME"
+    local full_snap_id="${dataset_name}@${SNAPNAME_local}"
+    local creation_time_epoch
+    creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
+    _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME_local" "$creation_time_epoch"
+  else
+    _handle_noncompare_snapdir "$snappath" "$dataset"
+  fi
+}
 
-  # ADDED: Declared snapdirs as local
-  # Normalize dataset path to avoid double leading slashes in constructed paths
-  local snapdirs="${ds_path%/}/$ZFSSNAPDIR/*"
+function process_snapshots_for_dataset() {
+  local dataset="$1"
+
+  # Normalize and compute both filesystem path and ZFS dataset name forms.
+  IFS='|' read -r ds_path dataset_name < <(_normalize_dataset "$dataset")
+
+  [[ $VERBOSE == 1 ]] && echo "Processing dataset: $dataset_name (path: $ds_path)"
+  [[ $VERBOSE == 1 ]] && echo "Using ZFSSNAPDIR: $ZFSSNAPDIR"
+
+  # Trailing-wildcard handling: may decide to skip this dataset
+  if ! _should_skip_for_trailing_wildcard "$dataset"; then
+    return
+  fi
+
+  # Enable globbing for snapshot directory expansion
+  set +f
+  local snapdirs
+  snapdirs=$(_build_snapdirs "$ds_path")
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
   local snapshot_found=0
-  # Track files found count at start for per-dataset reporting
   local dataset_start_count=${found_files_count:-0}
   for snappath in $snapdirs; do
-    # Skip if the snapshot directory does not exist
-    if [[ ! -d "$snappath" ]]; then
-      [[ $VERBOSE == 1 ]] && echo -e "(${YELLOW}No Snapshots found in this dataset${NC})"
-      continue
-    fi
-
-    snapshot_found=1
-    # ADDED: Declared SNAPNAME as local
-    local SNAPNAME=$(/bin/basename "$snappath")
-
-    # Symlink check, skip if true
-    [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "Skipping symlink: ${snappath}" && continue
-
-    [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${YELLOW}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
-
-    local regex_pattern
-
-    # If SNAPREGEX is literally '*', convert it to '.*' for regex to match anything
-    if [[ "$SNAPREGEX" == "*" ]]; then
-      regex_pattern=".*"
-    else
-      # Escape regex special characters and wrap in '.*' for a 'contains' match
-      regex_pattern="$(printf '%s' "$SNAPREGEX" | sed -e 's/[][\.^$*+?(){}|]/\\&/g' -e 's/\*/.*/g' -e 's/?/./g')"
-      regex_pattern=".*$regex_pattern.*"
-    fi
-
-    # Use the =~ operator for regular expression matching
-    if [[ ! "$SNAPNAME" =~ $regex_pattern ]]; then
-      [[ $VERBOSE == 1 ]] && echo "Skipping, doesn't match -s regex"
-      continue
-    fi
-
-    [[ $VERBOSE == 1 ]] && echo -e "Search path:(${BLUE}$snappath${NC})"
-
-    ##
-    # NEW FUNCTIONALITY MODIFICATION BEGIN: Conditional find command execution & bugfix
-    # This block ensures 'local' declarations and 'zfs get' are performed only
-    # when in COMPARE mode,
-    # It also corrects the 'zfs get' commands target and the 'xargs' arg passing for accurate path construction.
-    ##
-    if [[ $COMPARE == 1 ]]; then
-      local full_snap_id="${dataset_name}@${SNAPNAME}"
-      local creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
-      _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME" "$creation_time_epoch"
-    else
-      _handle_noncompare_snapdir "$snappath" "$dataset"
-    fi
-    ##
-    # NEW FUNCTIONALITY MODIFICATION END
-    ##
+    # Process each snapshot path via helper (keeps main function small)
+    _process_snappath "$snappath" "$dataset" "$ds_path" "$dataset_name" && snapshot_found=1 || true
   done
 
-  # Check if no snapshots were found
   if [[ $snapshot_found -eq 0 ]]; then
     echo -e "${RED}Error: No snapshots found for dataset: $dataset${NC}"
   fi
 
-  # Disable globbing again after processing
+  # Disable globbing again
   set -f
 
-  ##
-  # CUSTOM CODE END
-  ##
-
-  # Print per-dataset summary for non-compare runs
   if [[ $COMPARE != 1 ]]; then
     local dataset_end_count=${found_files_count:-0}
     local dataset_delta=$((dataset_end_count - dataset_start_count))

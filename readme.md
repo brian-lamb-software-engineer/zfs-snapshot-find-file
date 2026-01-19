@@ -17,12 +17,18 @@ Use `-c` (compare) to run dataloss detection: the tool builds a snapshot invento
 Important notes
 
 - Be careful with recursive scope: ensure you scan the same set of datasets you intend to compare (use `-r` or dataset wildcards appropriately).
-- Default behavior is conservative — no destructive operations are executed unless you explicitly request them via `--destroy-snapshots`.
+- Default behavior is conservative — no destructive operations are executed unless you explicitly request them via `--destroy-snapshots` and the master destroy switch is enabled in `lib/common.sh`.
 
 
 ## Cleanup and destroy
 
 The tool supports conservative, flag-driven snapshot cleanup workflows. By default nothing is destroyed — the tool generates a destroy plan and prints "WOULD delete" lines so you can review suggested removals.
+
+Terminology and safety
+
+- `--delete-snapshots` (plan-only) generates a destroy plan but does not execute it. The plan-only behavior is controlled by the internal configuration variable `SFF_DELETE_PLAN` in `lib/common.sh`.
+- `--destroy-snapshots` requests execution of the generated plan, but actual execution requires the master switch `DESTROY_SNAPSHOTS` to be enabled in `lib/common.sh` (this is a deliberate, permanent guard — edit the file to enable destructive execution). The script will prompt interactively before executing the plan.
+- There is no environment-variable override used by the script; this design ensures a config edit is required to permit destructive runs.
 
 Usage examples:
 
@@ -48,10 +54,11 @@ The script will prompt `Execute destroy plan now? [y/N]` before executing the ge
 ./snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots --force -s "*" -f "index.html"
 ```
 
+
 Notes:
 
 - The tool is intentionally conservative — test with `--delete-snapshots` (plan-only) before attempting to execute any destroys.
-- There is no non-interactive `--yes` option; interactive confirmation is required before plan execution.
+- There is no non-interactive `--yes` option; interactive confirmation is required before plan execution when `DESTROY_SNAPSHOTS` is enabled.
 
 
 
@@ -121,6 +128,18 @@ Recent changes (applied during Phase 1)
 - `snapshots-find-file`: pass `DATASETPATH_FS` into compare/delta/cleanup functions to ensure filesystem operations use absolute paths.
 
 These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+
+## Phase 2 refactor (slimmed functions)
+
+Summary of Phase 2 changes:
+- **Files refactored (in-place):** `lib/common.sh`, `lib/zfs-search.sh`, `lib/zfs-compare.sh`, `lib/zfs-cleanup.sh` — large functions were split into smaller, focused helpers but kept in the same files (no new helper files were added).
+- **Purpose:** reduce function size, improve readability, and make later unit-testing and targeted fixes easier while preserving existing external interfaces.
+- **Key functions slimmed:** `initialize_search_parameters()` (now calls small helpers), `process_snapshots_for_dataset()` (now uses per-step helpers), `compare_snapshot_files_to_live_dataset()` and `log_snapshot_deltas()` (delegated work to small helpers), and the cleanup flow kept intact.
+
+Notes for reviewers:
+- All original author comments and important TODOs were preserved and kept immediately above the code they reference.
+- Behavior and CLI interfaces were preserved; changes are internal refactors only.
+
 -
 These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
 

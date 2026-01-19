@@ -1,6 +1,93 @@
 #!/bin/bash
 # ZFS comparison and delta analysis functions
 
+# Phase 2 helpers: split large compare functions into smaller responsibilities
+function _gather_live_files() {
+  # Args: live_dataset_path tmp_base
+  local live_dataset_path="$1"
+  local tmp_base="$2"
+  local live_files_tmp
+  live_files_tmp=$(mktemp "${tmp_base}/live_files.XXXXXX")
+  # Use -L to dereference symlinks to ensure we get actual file paths.
+  # Using -print0 and xargs -0 for robust handling of special characters in filenames.
+  #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
+  # Use -print0 and xargs -0 to handle special chars robustly
+  /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
+  echo "$live_files_tmp"
+}
+
+function _sort_snapshot_files() {
+  # Args: raw_snapshot_file_list_tmp tmp_base
+  local raw="$1"
+  local tmp_base="$2"
+  local sorted
+  sorted=$(mktemp "${tmp_base}/sorted_snapshot_files.XXXXXX")
+  cat "$raw" | sort -t'|' -k1,1 -k3,3nr > "$sorted"
+  echo "$sorted"
+}
+
+function _process_diff_pair() {
+  # Args: parent_compare_point current_compare_point delta_log_file
+  local parent_compare_point="$1"
+  local current_compare_point="$2"
+  local delta_log_file="$3"
+
+  /sbin/zfs diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
+    local diff_type_char="${type:0:1}"
+    local full_path="${path}"
+    local is_ignored="false"
+    local rendered_type=""
+
+    case "$diff_type_char" in
+      '+') rendered_type="ADD" ;;
+      '-') rendered_type="DEL" ;;
+      'M') rendered_type="MOD" ;;
+      'R')
+        rendered_type="REN"
+        full_path="${path}"
+        local new_path_for_check="${path##* -> }"
+        for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+          if [[ "$new_path_for_check" =~ $pattern ]]; then
+            is_ignored="true"
+            break
+          fi
+        done
+        ;;
+      *) continue ;;
+    esac
+
+    if [[ "$diff_type_char" != "R" ]]; then
+      for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+        if [[ "$full_path" =~ $pattern ]]; then
+          is_ignored="true"
+          break
+        fi
+      done
+    fi
+
+    printf "%s,\"%s\",%s,\"%s\",\"%s\",\"%s\"\n" \
+           "${rendered_type}" \
+           "${full_path//\"/\"\"}" \
+           "${is_ignored}" \
+           "${comparison_context//\"/\"\"}" \
+           "${parent_compare_point//\"/\"\"}" \
+           "${current_compare_point//\"/\"\"}" >> "$delta_log_file"
+  done
+}
+
+function _get_all_compare_points() {
+  # Args: dataset
+  # Output: lines of compare points (oldest snapshot ... newest snapshot ... live dataset)
+  local dataset="$1"
+  # Get snapshots for this dataset, sorted by creation time ASCENDING (oldest to newest)
+  # Skip header from zfs list
+  zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2
+  # Finally output the live dataset as the latest compare point
+  printf '%s
+' "$dataset"
+}
+
+
 function compare_snapshot_files_to_live_dataset() {
   local raw_snapshot_file_list_tmp="$1" # Expects file with live_equivalent_path|snap_name|timestamp
   local live_dataset_path="$2"
@@ -31,18 +118,10 @@ function compare_snapshot_files_to_live_dataset() {
   echo "Unique Ignored Files (matching patterns in IGNORE_REGEX_PATTERNS):" > "$ignored_log_file"
   echo "------------------------------------------------------------" >> "$log_file"
 
-  # Temporary file to store paths of files in the live dataset
-  local live_files_tmp
-  live_files_tmp=$(mktemp "${tmp_base}/live_files.XXXXXX")
-
   # 1. Get all files in the current live dataset
   [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Gathering live dataset files from: $live_dataset_path${NC}"
-  # Use -L to dereference symlinks to ensure we get actual file paths.
-  # Using -print0 and xargs -0 for robust handling of special characters in filenames.
-  #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
-  #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$1"' _ "{}" > "$live_files_tmp"\
-  # shellcheck disable=SC2016
-  /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
+  local live_files_tmp
+  live_files_tmp=$(_gather_live_files "$live_dataset_path" "$tmp_base")
 
   [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Live dataset file count: $(wc -l < \"$live_files_tmp\")${NC}"
 
@@ -67,8 +146,7 @@ function compare_snapshot_files_to_live_dataset() {
   # Using | as delimiter for sort. -k1,1 ensures sorting on the first field (path),
   # -k3,3nr on the third field (timestamp) numerically in reverse (newest first).
   local sorted_snapshot_files_tmp
-  sorted_snapshot_files_tmp=$(mktemp "${tmp_base}/sorted_snapshot_files.XXXXXX")
-  cat "$raw_snapshot_file_list_tmp" | sort -t'|' -k1,1 -k3,3nr > "$sorted_snapshot_files_tmp"
+  sorted_snapshot_files_tmp=$(_sort_snapshot_files "$raw_snapshot_file_list_tmp" "$tmp_base")
 
   # Read sorted snapshot file paths (path|snap_name|timestamp)
   # Using 'while read -r' for robust line-by-line reading.
@@ -78,8 +156,8 @@ function compare_snapshot_files_to_live_dataset() {
 
       # Check if this exact path has already been processed and reported
       if grep -Fxq "$live_equivalent_path" "$seen_paths_tmp"; then
-      ((skipped_reported_files_count++)) # Increment skip counter
-      continue
+        ((skipped_reported_files_count++)) # Increment skip counter
+        continue
       fi
 
       # Check against the ignore list first
@@ -189,14 +267,9 @@ function log_snapshot_deltas() {
 
     # Get snapshots for this dataset, sorted by creation time ASCENDING (oldest to newest)
     # We will iterate and build parent/child pairs
-    local snapshots_raw=$(zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2) # Skip header
-    local -a snap_names=()
-    while IFS= read -r line; do
-      snap_names+=("$line")
-    done < <(echo "$snapshots_raw")
-
-    # Add the live filesystem itself as the "latest point" for comparison with the newest snapshot
-    local -a all_compare_points=("${snap_names[@]}" "$dataset")
+    # Delegate snapshot listing to helper to keep this function small
+    local -a all_compare_points=()
+    mapfile -t all_compare_points < <(_get_all_compare_points "$dataset")
 
     # If there's only one item (just the live dataset or no snapshots), skip diffing pairs
     if [[ ${#all_compare_points[@]} -lt 2 ]]; then
@@ -214,54 +287,8 @@ function log_snapshot_deltas() {
       [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing ${current_compare_point} to ${parent_compare_point}${NC}"
 
       # Use zfs diff to get changes
-      # Pipe directly to while read for robust parsing
-      /sbin/zfs diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
-        local diff_type_char="${type:0:1}" # Extract the first char (+, -, M, R, D, etc.)
-        local full_path="${path}" # Initialize full_path
-        local is_ignored="false"
-        local rendered_type="" # For CSV output (ADD, DEL, MOD, REN)
-
-        case "$diff_type_char" in
-          '+') rendered_type="ADD" ;;
-          '-') rendered_type="DEL" ;;
-          'M') rendered_type="MOD" ;;
-          'R')
-            rendered_type="REN"
-            # For renames, the path is "old_path -> new_path". We want to check the new path for ignore patterns
-            full_path="${path}" # Keep the full 'old -> new' string in the CSV path field
-            local new_path_for_check="${path##* -> }" # Extract only the new path for pattern matching
-            # Check new_path_for_check against ignore patterns
-            for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
-              if [[ "$new_path_for_check" =~ $pattern ]]; then
-                is_ignored="true"
-                break
-              fi
-            done
-            ;;
-          *) continue ;; # Skip other diff types like 'D' (directory), '?' etc.
-        esac
-
-        # For non-renames, check the full_path against ignore patterns
-        if [[ "$diff_type_char" != "R" ]]; then
-          for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
-            if [[ "$full_path" =~ $pattern ]]; then
-              is_ignored="true"
-              break
-            fi
-          done
-        fi
-
-        # Output in CSV format
-        # Use printf for robust CSV quoting, especially if paths have commas or quotes
-        # Replace existing echo with printf
-        printf "%s,\"%s\",%s,\"%s\",\"%s\",\"%s\"\n" \
-               "${rendered_type}" \
-               "${full_path//\"/\"\"}" \
-               "${is_ignored}" \
-               "${comparison_context//\"/\"\"}" \
-               "${parent_compare_point//\"/\"\"}" \
-               "${current_compare_point//\"/\"\"}" >> "$delta_log_file"
-      done
+        # Delegate diff processing to helper to keep this function small
+        _process_diff_pair "$parent_compare_point" "$current_compare_point" "$delta_log_file"
     done
   done
   echo "\nDelta analysis finished." >> "$delta_log_file"

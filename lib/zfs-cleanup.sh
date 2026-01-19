@@ -103,9 +103,11 @@ function _evaluate_deletion_candidates_and_plan() {
         # Append the real destroy command to the plan file (uncommented)
         # Respect --force (SFF_DESTROY_FORCE) by adding -f when requested
         if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
-          echo "/sbin/zfs destroy -f \"${current_snap}\"" >> "$destroy_cmds_tmp"
+          #echo "/sbin/zfs destroy -f \"${current_snap}\"" >> "$destroy_cmds_tmp"
+          echo "WOULD DESTROY HERE1!"
         else
-          echo "/sbin/zfs destroy \"${current_snap}\"" >> "$destroy_cmds_tmp"
+          ##echo "/sbin/zfs destroy \"${current_snap}\"" >> "$destroy_cmds_tmp"
+          echo "WOULD DESTROY HERE2!"
         fi
       fi
     done
@@ -163,13 +165,20 @@ function identify_and_suggest_deletion_candidates() {
   # If plan exists and user opted into apply, enforce environment guard
   if [[ -s "$destroy_cmds_tmp" ]]; then
     if [[ "${DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
-      # Ask for confirmation before executing
-      if prompt_confirm "Execute destroy plan now?" "n"; then
-        local exec_log="$tmp_base/destroy-exec-$TIMESTAMP.log"
-        echo "Executing destroy plan; logging to: $exec_log"
-        bash "$plan_file" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
+      # Enforce top-level allow flag: if config explicitly disables destroy
+      # execution, never run destroys regardless of CLI flags.
+      if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
+        echo -e "${YELLOW}Execution blocked: DESTROY_SNAPSHOTS is disabled in configuration. To permit execution, edit lib/common.sh and set DESTROY_SNAPSHOTS=1.${NC}"
+        echo "Destroy plan written to: $plan_file"
       else
-        echo "User declined to execute destroy plan. Plan remains at: $plan_file"
+        # Ask for confirmation before executing
+        if prompt_confirm "Execute destroy plan now?" "n"; then
+          local exec_log="$tmp_base/destroy-exec-$TIMESTAMP.log"
+          echo "Executing destroy plan; logging to: $exec_log"
+          bash "$plan_file" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
+        else
+          echo "User declined to execute destroy plan. Plan remains at: $plan_file"
+        fi
       fi
     else
       echo -e "${YELLOW}Dry-run: no destroys executed. To apply, re-run with --destroy-snapshots.${NC}"

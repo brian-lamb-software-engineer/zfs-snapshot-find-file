@@ -1,11 +1,18 @@
 #!/bin/bash
-# Common variables, constants, and utility functions
+# common code lives on this file, code that all the other libs use, as well as main vars
 
+# Common variables, constants, and utility functions
 FILESTR=""
+# Plan-only delete flag (creates a destroy plan but does not execute it)
+SFF_DELETE_PLAN=1
+# Master destroy execution flag (must be explicitly enabled in config)
+DESTROY_SNAPSHOTS=0
 # Deletion / destroy flags (safe defaults)
 SFF_DESTROY_FORCE=0
-DELETE_SNAPSHOTS=0
-DESTROY_SNAPSHOTS=0
+# Capture top-level allow flags so CLI args cannot override when intentionally disabled.
+# Set these to 0 here to permanently disable plan/apply unless this file is edited.
+SFF_DELETE_PLAN_ALLOWED=${SFF_DELETE_PLAN}
+DESTROY_SNAPSHOTS_ALLOWED=${DESTROY_SNAPSHOTS}
 # shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
@@ -66,14 +73,16 @@ function help(){
     -r (optional) (recursively search into child datasets)
     -v (optional) (verbose output)
     --delete-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
-    --destroy-snapshots (optional) orchestrate cleanup and attempt to apply destroys (still requires SFF_ALLOW_DESTROY=1)
+    --destroy-snapshots (optional) orchestrate cleanup and attempt to apply destroys (requires DESTROY_SNAPSHOTS to be enabled in lib/common.sh)
     --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
     -h (this help)
     "
   echo "
     Notes for deletion:
     - By default no destroys are executed. To generate a plan use --delete-snapshots.
-    - To attempt to apply destroys pass --destroy-snapshots and set environment variable SFF_ALLOW_DESTROY=1.
+    - To attempt to apply destroys pass --destroy-snapshots. Execution is only permitted if
+      `DESTROY_SNAPSHOTS` is enabled in `lib/common.sh` (this is a permanent switch so
+      destructive execution requires editing that configuration variable).
     - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
   "
   echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
@@ -171,9 +180,9 @@ function parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --delete-snapshots)
-        DELETE_SNAPSHOTS=1; shift ;;
+        REQUEST_SFF_DELETE_PLAN=1; shift ;;
       --destroy-snapshots)
-        DESTROY_SNAPSHOTS=1; shift ;;
+        REQUEST_DESTROY_SNAPSHOTS=1; shift ;;
       --force)
         SFF_DESTROY_FORCE=1; shift ;;
       *) new_args+=("$1"); shift ;;
@@ -200,9 +209,9 @@ function parse_arguments() {
       r)
          RECURSIVE=1 ;;
       D)
-        DELETE_SNAPSHOTS=1 ;;
+        REQUEST_SFF_DELETE_PLAN=1 ;;
       X)
-        DESTROY_SNAPSHOTS=1 ;;
+        REQUEST_DESTROY_SNAPSHOTS=1 ;;
       c)
          COMPARE=1 ;;
       h) help ;;
@@ -213,6 +222,32 @@ function parse_arguments() {
 
   # set back $1 index
   shift "$((OPTIND-1))"
+
+  # Respect top-level allow flags: if the admin has permanently disabled
+  # delete/destroy by setting the top-level variables to 0, ignore CLI
+  # requests. This makes the top-level setting a hard switch that must be
+  # edited in the file to enable destructive behavior.
+  if [[ "${SFF_DELETE_PLAN_ALLOWED:-1}" -eq 0 ]]; then
+    if [[ "${REQUEST_SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
+      echo -e "${YELLOW}Note: --delete-snapshots ignored because destroy-plan generation is disabled in configuration.${NC}"
+    fi
+    SFF_DELETE_PLAN=0
+  else
+    if [[ "${REQUEST_SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
+      SFF_DELETE_PLAN=1
+    fi
+  fi
+
+  if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
+    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+      echo -e "${YELLOW}Note: --destroy-snapshots ignored because DESTROY_SNAPSHOTS is disabled in configuration.${NC}"
+    fi
+    DESTROY_SNAPSHOTS=0
+  else
+    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+      DESTROY_SNAPSHOTS=1
+    fi
+  fi
 
   if [[ -z $DATASETPATH ]]; then
     echo "You must specify at least -d, exiting, bye!"
@@ -227,15 +262,13 @@ function parse_arguments() {
 }
 
 function initialize_search_parameters() {
-
   local splitArr
 
-  # Build file pattern string from -f arguments (moved to patterns.sh)
+  # Build file pattern string from -f arguments
   build_file_pattern
+
   # Normalize dataset filesystem path with leading slash for later filesystem operations
-  DATASETPATH_FS="$DATASETPATH"
-  DATASETPATH_FS="${DATASETPATH_FS#/}"
-  DATASETPATH_FS="/${DATASETPATH_FS}"
+  _normalize_dataset_fs "$DATASETPATH"
 
   # Debugging output for key variables
   [[ $VERBOSE == 1 ]] && echo "Initializing search parameters..."
@@ -244,48 +277,15 @@ function initialize_search_parameters() {
   [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
   [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
 
-  # If compare mode requested, ensure we include child datasets for accurate dataloss detection.
-  # This makes compare mode safe-by-default (it will search child datasets unless -r is explicitly omitted),
-  # and prints a clear warning so the user understands the broader work being performed.
-  if [[ $COMPARE -eq 1 && $RECURSIVE -ne 1 ]]; then
-    echo -e "${YELLOW}Compare mode requires full dataset discovery; enabling recursive discovery (-r) for accurate results.${NC}"
-    RECURSIVE=1
-  fi
+  # Ensure compare mode implies recursive discovery for safety
+  _ensure_compare_recursive
 
-  # Discover datasets based on recursive flag, by delegating to helper
-  # (moved to `lib/datasets.sh` as `discover_datasets()`)
+  # Discover datasets based on recursive flag
   discover_datasets "$DATASETPATH" "$RECURSIVE"
 
-  ##
-  # CUSTOM CODE BEGIN
-  # WARNING disabling file globbing so it doesn't expand into the pathnames when 
-  #   you set them to a var. If you add any code that needs it reenabled, you
-  #   will either need to process those before this line and set needed data to 
-  #   a var there, or reenable it after this code block
-  set -f
-  # get count of specified datasetpath path depth
-  #DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
-  #DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
-  DSP_CONSTITUENTS_ARR=() # Explicitly initialize as empty array
-  DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
-  DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
-  # echo "dsp constituents arr: ${DSP_CONSTITUENTS_ARR[*]}"
-  # echo "dsp constituents arr cnt: ${#DSP_CONSTITUENTS_ARR[*]}"
-  # count how many trailing asterisks
-  # walk array backwards, using c style
-  for (( idx=${#DSP_CONSTITUENTS_ARR[@]}-1; idx>=0; idx-- ));  do
-    VAL=${DSP_CONSTITUENTS_ARR[$idx]}
-    # echo "id($idx) val:($VAL)"
-    # get id of the last dir before the trailing wildcards (-1 is because it stops
-    #   on the dir after the last specified folder, subtract that also)
-    TRAILING_WILDCARD_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - idx - 1 ))
-    BASE_DSP_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - TRAILING_WILDCARD_CNT ))
-    # stop on last specified folder (first since we're reverse sorted array)
-    [[ $VAL != "*" ]] && break
-  done
-  set +f
-  # CUSTOM CODE END (moved inside a function)
-  ##
+  # Compute trailing wildcard counts and base dataset depth (CUSTOM CODE)
+  _compute_trailing_wildcard_counts
+
 }
 
   #!/bin/bash
@@ -457,3 +457,46 @@ function initialize_search_parameters() {
       fi
     done
   }
+
+# Helpers to split initialize_search_parameters for Phase 2
+function _normalize_dataset_fs() {
+  # Args: datasetpath
+  DATASETPATH_FS="$1"
+  DATASETPATH_FS="${DATASETPATH_FS#/}"
+  DATASETPATH_FS="/${DATASETPATH_FS}"
+}
+
+function _ensure_compare_recursive() {
+  # If compare mode requested, ensure recursive discovery
+  if [[ $COMPARE -eq 1 && $RECURSIVE -ne 1 ]]; then
+    echo -e "${YELLOW}Compare mode requires full dataset discovery; enabling recursive discovery (-r) for accurate results.${NC}"
+    RECURSIVE=1
+  fi
+}
+
+function _compute_trailing_wildcard_counts() {
+  ##
+  # CUSTOM CODE BEGIN
+  # WARNING disabling file globbing so it doesn't expand into the pathnames when 
+  #   you set them to a var. If you add any code that needs it reenabled, you
+  #   will either need to process those before this line and set needed data to 
+  #   a var there, or reenable it after this code block
+  set -f
+  DSP_CONSTITUENTS_ARR=() # Explicitly initialize as empty array
+  DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
+  DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
+  # count how many trailing asterisks
+  # walk array backwards, using c style
+  for (( idx=${#DSP_CONSTITUENTS_ARR[@]}-1; idx>=0; idx-- ));  do
+    VAL=${DSP_CONSTITUENTS_ARR[$idx]}
+    # get id of the last dir before the trailing wildcards (-1 is because it stops
+    #   on the dir after the last specified folder, subtract that also)
+    TRAILING_WILDCARD_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - idx - 1 ))
+    BASE_DSP_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - TRAILING_WILDCARD_CNT ))
+    # stop on last specified folder (first since we're reverse sorted array)
+    [[ $VAL != "*" ]] && break
+  done
+  set +f
+  # CUSTOM CODE END (moved inside a function)
+  ##
+}

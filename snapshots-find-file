@@ -35,7 +35,19 @@ if [[ $COMPARE == 1 ]]; then
   log_snapshot_deltas "$DATASETPATH_FS" "${DATASETS[@]}"
   # Note: Do not automatically suggest snapshot deletions during compare/search.
   # To run deletion candidate analysis, invoke the cleanup step explicitly.
-  echo -e "${BLUE}Comparison process complete. Exiting.${NC}"
+  echo -e "${BLUE}Comparison process complete.${NC}"
+
+  # Print the human-readable comparison summary last (flat bottom of output)
+  tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
+  summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
+  if [[ -f "$summary_csv" ]]; then
+    echo ""
+    echo "--- Comparison Summary ---"
+    awk -F, 'NR>1 { if($1=="total_snapshot_entries") print "Total snapshot entries processed: "$2; else if($1=="ignored_entries") print "Total ignored entries: "$2; else if($1=="found_in_live") print "Total found in live dataset: "$2; else if($1=="missing") print "Total missing (snapshot-only): "$2; else if($1=="skipped_duplicates") print "Total skipped (duplicates): "$2 }' "$summary_csv"
+    echo "Wrote summary to: $summary_csv"
+  fi
+
+  echo -e "${BLUE}Exiting.${NC}"
   exit 0
 fi
 

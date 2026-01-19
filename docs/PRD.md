@@ -8,6 +8,9 @@ Scope (Phase 1)
 - Catalog and inspect the current codebase split across `snapshots-find-file` ("sff") and `lib/*.sh`.
 - This phase is strictly cataloging: do not change functionality or refactor code. The refactor into modular functions (<=60 lines each) is Phase 2.
 
+AGENT: see copilot-context.md for instructions first
+AGENT: do not remove my comments, keep them above the lines they belong to.  if that ends up being an arracy or code block that cant take comments, but it immediately above that block. 
+
 Goals (Phase 1 — Cataloging)
 - Keep code DRY: treat `lib/common.sh` as the shared utilities file (special case) used by other `lib/*.sh` files.
 - Do not modify behaviour or move code in this phase; only identify code that has not yet been moved off `snapshots-find-file` into `lib/`.
@@ -100,3 +103,5 @@ ADDED NEW FUNCTIONS TO ZFS-SEARCH
 - added `process_snapshots_for_dataset()` improvements
 - fixed xargs quoting for compare mode
 - updated temporary file handling
+
+Output in a text box so its easily copyable, and so there is no auto converting of hypens to bullets and no space after the header by vs code formatting.

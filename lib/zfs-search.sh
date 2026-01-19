@@ -132,17 +132,24 @@ function process_snapshots_for_dataset() {
         # shellcheck disable=SC2016
         xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
     else
-      # ADDED: Declared RESULTS as local
-      local RESULTS
-      RESULTS=$(/bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -exec ls -lh --color=always -g {} \; 2>/dev/null)
-      if [[ ! -z "$RESULTS" ]]; then
-        echo "$RESULTS"
-        # Also append raw file paths to the global temp file so the caller can detect
-        # that files were found when not running in COMPARE mode.
-        /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
-          # shellcheck disable=SC2016
-          xargs -0 -I {} bash -c 'echo "$1"' _ "{}" >> "$all_snapshot_files_found_tmp"
+      # Print found files in green and append raw paths to the global temp file
+      local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
+      local found_tmp
+      found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
+
+      /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
+      if [[ -s "$found_tmp" ]]; then
+        # Read null-delimited paths and print each in green
+        while IFS= read -r -d '' file; do
+          echo -e "${GREEN}${file}${NC}"
+          # Also append raw file paths to the global temp file so the caller can detect
+          # that files were found when not running in COMPARE mode.
+          #/bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
+          #  # shellcheck disable=SC2016
+          echo "$file" >> "$all_snapshot_files_found_tmp"
+        done < "$found_tmp"
       fi
+      rm -f "$found_tmp"
     fi
     ##
     # NEW FUNCTIONALITY MODIFICATION END

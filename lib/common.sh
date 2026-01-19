@@ -14,6 +14,7 @@ RED='\033[0;31m'
 YELLOW='\033[33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
+GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 # Example 1: Ignore cache directories
 # Example 2: Ignore temporary directories

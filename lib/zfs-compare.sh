@@ -105,7 +105,7 @@ function compare_snapshot_files_to_live_dataset() {
           # Mark as seen to avoid duplicate reporting
           echo "$live_equivalent_path" >> "$seen_paths_tmp"
         else
-          echo "$live_equivalent_path (found in newest snapshot: [$snap_name] )" | tee -a "$log_file"
+          echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [$snap_name] )${NC}" | tee -a "$log_file"
           echo "$live_equivalent_path" >> "$seen_paths_tmp" # Mark as seen
           ((missing_files_count++))
         fi
@@ -115,15 +115,20 @@ function compare_snapshot_files_to_live_dataset() {
   echo "" >> "$ignored_log_file"
   echo "Ignored files cataloging finished." >> "$ignored_log_file"
 
-  # Aggregate summary
+  # Cleanup temporary files (counters retained for final summary)
+  rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
+
+  # Aggregate summary (printed last for CLI readability)
   echo -e "${BLUE}Writing comparison summary to logs...${NC}"
-  echo "--- Comparison Summary ---" | tee -a "$log_file"
-  echo "Total snapshot entries processed: $total_snapshot_entries" | tee -a "$log_file"
-  echo "Total ignored entries: $ignored_files_count" | tee -a "$log_file"
-  echo "Total found in live dataset: $found_in_live_count" | tee -a "$log_file"
-  echo "Total missing (snapshot-only): $missing_files_count" | tee -a "$log_file"
-  echo "Total skipped (duplicates): ${skipped_reported_files_count:-0}" | tee -a "$log_file"
-  echo "" >> "$log_file"
+  {
+    echo "--- Comparison Summary ---"
+    echo "Total snapshot entries processed: $total_snapshot_entries"
+    echo "Total ignored entries: $ignored_files_count"
+    echo "Total found in live dataset: $found_in_live_count"
+    echo "Total missing (snapshot-only): $missing_files_count"
+    echo "Total skipped (duplicates): ${skipped_reported_files_count:-0}"
+    echo ""
+  } >> "$log_file"
 
   # Append summary to ignored log as well
   echo "--- Ignored Summary ---" >> "$ignored_log_file"
@@ -137,14 +142,10 @@ function compare_snapshot_files_to_live_dataset() {
     echo "ignored_entries,$ignored_files_count"
     echo "found_in_live,$found_in_live_count"
     echo "missing,$missing_files_count"
-    echo "skipped_duplicates,$skipped_reported_files_count"
     echo "skipped_duplicates,${skipped_reported_files_count:-0}"
   } > "$summary_csv"
 
-  echo "Wrote summary to: $summary_csv" | tee -a "$log_file"
-
-  # Cleanup temporary files
-  rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
+  echo "Wrote summary to: $summary_csv" >> "$log_file"
 
 }
 

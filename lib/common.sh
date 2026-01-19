@@ -42,6 +42,8 @@ WHITE="${COL}1;37m"
 PURPLE="${COL}0;35m"
 GREEN="${COL}0;32m"
 NC="${COL}0m" # No Color
+# Prefix for temporary files created by this tool
+SFF_TMP_PREFIX="sff_"
 # Example 1: Ignore cache directories
 # Example 2: Ignore temporary directories
 # Example 3: Ignore macOS specific files
@@ -69,7 +71,7 @@ TRAILING_WILDCARD_CNT=0
 BASE_DSP_CNT=0
 DATASETS=() # Will store the list of datasets to iterate
 
-all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/all_snapshot_files_found.XXXXXX")
+all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.XXXXXX")
 
 function help(){
   echo

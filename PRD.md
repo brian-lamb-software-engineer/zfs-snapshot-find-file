@@ -15,7 +15,7 @@ AGENT: see copilot-context.md for instructions first
 AGENT: do not remove my comments, keep them above the lines they belong to.  if that ends up being an arracy or code block that cant take comments, but it immediately above that block. 
 
 Goals (Phase 1 — Cataloging)
-- Keep all code DRY: treat `lib/common.sh` as the shared utilities file (special case) used by other `lib/*.sh` files.
+- Keep all code DRY (Do Not Repeat Yourself): treat `lib/common.sh` as the shared utilities file (special case) used by other `lib/*.sh` files.  Where you see redundant lines, reduce them to a function that can be called in its place
 - Do not modify behaviour or move code in this phase; only identify code that has not yet been moved off `snapshots-find-file` into `lib/`.
 - Build an actionable mapping of which functions live in which files and list any residual code in `snapshots-find-file` that still needs extraction.
 - Safe defaults: confirm no destructive operations will be executed as part of cataloging.

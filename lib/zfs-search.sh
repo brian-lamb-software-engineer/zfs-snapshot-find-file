@@ -143,42 +143,55 @@ function _process_snappath() {
 
 function process_snapshots_for_dataset() {
   local dataset="$1"
-
   vlog "zfs-search.sh process_snapshots_for_dataset START dataset=${dataset}"
-  # Normalize and compute both filesystem path and ZFS dataset name forms.
-  IFS='|' read -r ds_path dataset_name < <(_normalize_dataset "$dataset")
-
-  [[ $VERBOSE == 1 ]] && echo -e "Processing dataset: ${WHITE}$dataset_name${NC} (path: ${WHITE}$ds_path${NC})"
-  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Using ZFSSNAPDIR: $ZFSSNAPDIR${NC}"
-
-  # Trailing-wildcard handling: may decide to skip this dataset
-  if ! _should_skip_for_trailing_wildcard "$dataset"; then
+  _psfd_init "$dataset"
+  if ! _psfd_should_process "$dataset"; then
     return
   fi
+  _psfd_iterate_snapdirs "$dataset"
+  _psfd_finalize "$dataset"
+}
 
-  # Enable globbing for snapshot directory expansion
+function _psfd_init() {
+  local dataset="$1"
+  IFS='|' read -r PSFD_ds_path PSFD_dataset_name < <(_normalize_dataset "$dataset")
+  export PSFD_ds_path PSFD_dataset_name
+  [[ $VERBOSE == 1 ]] && echo -e "Processing dataset: ${WHITE}$PSFD_dataset_name${NC} (path: ${WHITE}$PSFD_ds_path${NC})"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Using ZFSSNAPDIR: $ZFSSNAPDIR${NC}"
+  PSFD_dataset_start_count=${found_files_count:-0}
+  PSFD_snapshot_found=0
+}
+
+function _psfd_should_process() {
+  local dataset="$1"
+  if ! _should_skip_for_trailing_wildcard "$dataset"; then
+    return 1
+  fi
+  return 0
+}
+
+function _psfd_iterate_snapdirs() {
+  local dataset="$1"
+  local ds_path="${PSFD_ds_path}"
   set +f
   local snapdirs
   snapdirs=$(_build_snapdirs "$ds_path")
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
-  local snapshot_found=0
-  local dataset_start_count=${found_files_count:-0}
   for snappath in $snapdirs; do
-    # Process each snapshot path via helper (keeps main function small)
-    _process_snappath "$snappath" "$dataset" "$ds_path" "$dataset_name" && snapshot_found=1 || true
+    _process_snappath "$snappath" "$dataset" "$ds_path" "$PSFD_dataset_name" && PSFD_snapshot_found=1 || true
   done
+  set -f
+}
 
-  if [[ $snapshot_found -eq 0 ]]; then
+function _psfd_finalize() {
+  local dataset="$1"
+  if [[ ${PSFD_snapshot_found:-0} -eq 0 ]]; then
     echo -e "${RED}Error: No snapshots found for dataset: $dataset${NC}"
   fi
-
-  # Disable globbing again
-  set -f
-
   if [[ $COMPARE != 1 ]]; then
     local dataset_end_count=${found_files_count:-0}
-    local dataset_delta=$((dataset_end_count - dataset_start_count))
+    local dataset_delta=$((dataset_end_count - PSFD_dataset_start_count))
     echo "Total files found in dataset: $dataset_delta"
   fi
 }

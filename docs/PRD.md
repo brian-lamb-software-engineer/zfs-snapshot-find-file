@@ -73,6 +73,10 @@ Appendix — quick actions I can take next
 - Create branch and start extracting the first candidate function once you approve Phase 2 plan.
 - Or, if you prefer, paste `git log --stat` output and I will review change history before refactor.
 
+Recent runtime fixes applied (not part of Phase 2 refactor):
+- Use a tokenized `FILEARR` when building `find` expressions so multiple `-f` patterns and `-o`/`-name` tokens are passed as separate arguments to `find`. This fixes multi-`-f` and quoting/tokenization issues discovered during testing.
+- Fixed recursive dataset discovery by removing an extra `tail -n +2` that could drop the first dataset returned by `zfs list -rH`.
+
 ---
 Generated: $(date -u)
 

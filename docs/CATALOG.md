@@ -61,3 +61,9 @@ Recent changes (applied during Phase 1)
 - `snapshots-find-file`: pass `DATASETPATH_FS` into compare/delta/cleanup functions to ensure filesystem operations use absolute paths.
 
 These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+-
+These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+
+Additional runtime fixes applied during Phase 1 testing:
+- `lib/common.sh` / `build_file_pattern()`: switched to a tokenized `FILEARR` so `find` receives `-name` and `-o` tokens as separate arguments; this fixes multi-`-f` and quoting/tokenization bugs.
+- `discover_datasets()`: removed an extra `tail -n +2` from the recursive `zfs list` call which could cause the parent or first dataset to be omitted from discovery.

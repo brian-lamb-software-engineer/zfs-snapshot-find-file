@@ -15,3 +15,4 @@ Docs:
 
 AGENT: do not run git add/commit/push; present commit message only.
 AGENT: keep original comments and placement when moving code.
+AGENT: DO NOT touch my comments, e.g. # comment, keep them with the code them came with, if youo move the code, take the comments with it. 

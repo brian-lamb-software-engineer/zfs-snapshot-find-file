@@ -282,12 +282,33 @@ function initialize_search_parameters() {
     FILEARR=()
     for i in "${!splitArr[@]}"; do
       local pat="${splitArr[$i]}"
-      if [[ "$i" -eq 0 ]]; then
-        FILEARR+=(-name "$pat")
-        FILESTR="-name $pat"
+      # If the pattern includes a path separator, match by -path so users can
+      # target files inside specific subdirectories (e.g. users/brian/Documents)
+      if [[ "$pat" == *"/"* ]]; then
+        # Trim any leading slash for consistent relative matching from snapshot root
+        local pat_trim="${pat#/}"
+        # If the user didn't include any wildcard, wrap with '*' so it matches
+        # anywhere under the snapshot directory
+        if [[ "$pat_trim" == *"*"* ]]; then
+          local path_expr="*$pat_trim"
+        else
+          local path_expr="*$pat_trim*"
+        fi
+        if [[ "$i" -eq 0 ]]; then
+          FILEARR+=(-path "$path_expr")
+          FILESTR="-path $path_expr"
+        else
+          FILEARR+=(-o -path "$path_expr")
+          FILESTR+=" -o -path $path_expr"
+        fi
       else
-        FILEARR+=(-o -name "$pat")
-        FILESTR+=" -o -name $pat"
+        if [[ "$i" -eq 0 ]]; then
+          FILEARR+=(-name "$pat")
+          FILESTR="-name $pat"
+        else
+          FILEARR+=(-o -name "$pat")
+          FILESTR+=" -o -name $pat"
+        fi
       fi
     done
   }

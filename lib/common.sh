@@ -317,30 +317,35 @@ function parse_arguments() {
 }
 
 function initialize_search_parameters() {
-  local splitArr
+  _isp_build
+  _isp_debug_print
+  _isp_finalize
+}
 
-  # Build file pattern string from -f arguments
+# Helpers split from initialize_search_parameters to keep function sizes small
+function _isp_build() {
+  # Build file pattern string from -f arguments and normalize dataset path
   build_file_pattern
-
-  # Normalize dataset filesystem path with leading slash for later filesystem operations
   _normalize_dataset_fs "$DATASETPATH"
+}
 
-  # Debugging output for key variables
+function _isp_debug_print() {
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Initializing search parameters...${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Dataset path: $DATASETPATH_FS${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}File pattern: $FILENAME${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Snapshot regex: $SNAPREGEX${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Recursive flag: $RECURSIVE${NC}"
+}
 
+function _isp_finalize() {
   # Ensure compare mode implies recursive discovery for safety
   _ensure_compare_recursive
 
   # Discover datasets based on recursive flag
   discover_datasets "$DATASETPATH" "$RECURSIVE"
 
-  # Compute trailing wildcard counts and base dataset depth (CUSTOM CODE)
+  # Compute trailing wildcard counts and base dataset depth
   _compute_trailing_wildcard_counts
-
 }
 
   #!/bin/bash

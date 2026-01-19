@@ -97,11 +97,13 @@ Header: 4-8 words, ALL CAPS, concise (single line).
 - Immediately on the next line, start bullet lines with a hyphen (no bullets) followed by a single space and concise text (no blank line allowed between header and bullets).
 - Use 1-4 bullet lines total.
 - Keep the message focused and high-level; implementation details belong in the PR body.
+-Do a git diff --cached to get the info from files to build the sumamry for the commit messages
+- Output in a text box so its easily copyable, and so there is no auto converting of hypens to bullets and no space after the header by vs code formatting.
 
 Example
+```
 ADDED NEW FUNCTIONS TO ZFS-SEARCH
 - added `process_snapshots_for_dataset()` improvements
 - fixed xargs quoting for compare mode
 - updated temporary file handling
-
-Output in a text box so its easily copyable, and so there is no auto converting of hypens to bullets and no space after the header by vs code formatting.
+```

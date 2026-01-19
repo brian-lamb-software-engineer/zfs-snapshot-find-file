@@ -268,6 +268,25 @@ function initialize_search_parameters() {
     set -f
   }
 
+  # Prompt the user for a yes/no confirmation. Returns 0 for yes, 1 for no.
+  function prompt_confirm() {
+    local prompt_msg="$1"
+    local default_answer="$2" # 'y' or 'n'
+    local reply
+    if [[ -n "$default_answer" && "$default_answer" == "y" ]]; then
+      read -r -p "$prompt_msg [Y/n]: " reply
+      reply=${reply:-Y}
+    else
+      read -r -p "$prompt_msg [y/N]: " reply
+      reply=${reply:-N}
+    fi
+
+    case "$reply" in
+      Y|y) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
   ## Normalize a dataset string to ZFS-name form (no leading/trailing slash)
   function normalize_dataset_name() {
     local ds="$1"

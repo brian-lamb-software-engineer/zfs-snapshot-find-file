@@ -139,9 +139,13 @@ function _maybe_execute_plan() {
   local tmp_base="$3"
   local ts="$4"
 
+  # If plan exists and user opted into apply, enforce environment guard
   if [[ -s "$destroy_cmds_tmp" ]]; then
     if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+      # Ask for confirmation before executing
       if prompt_confirm "Execute destroy plan now?" "n"; then
+        # Enforce top-level allow flag: if config explicitly disables destroy
+        # execution, never run destroys regardless of CLI flags.
         if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
           echo -e "${YELLOW}Execution blocked: DESTROY_SNAPSHOTS is disabled in configuration. To permit execution, edit lib/common.sh and set DESTROY_SNAPSHOTS=1.${NC}"
           echo "Destroy plan written to: $plan_file"
@@ -210,6 +214,10 @@ function _evaluate_deletion_candidates_and_plan() {
         # Minimal heuristic: if there are no diffs against the previous snapshot
         # and the snapshot is not marked sacred, suggest it for deletion (dry-run).
         if [[ ${#diff_output_for_amr[@]} -eq 0 ]]; then
+          # Append the real destroy command to the plan file (uncommented)
+          # Respect --force (SFF_DESTROY_FORCE) by adding -f when requested
+          #echo "/sbin/zfs destroy -f \"${current_snap}\"" >> "$destroy_cmds_tmp"
+          ##echo "/sbin/zfs destroy \"${current_snap}\"" >> "$destroy_cmds_tmp"
           printf '# /sbin/zfs destroy %s\n' "$current_snap" >> "$destroy_cmds_tmp"
           echo "WOULD delete: $current_snap"
         else

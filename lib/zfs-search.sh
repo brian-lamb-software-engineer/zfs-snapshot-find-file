@@ -46,6 +46,7 @@ function _handle_noncompare_snapdir() {
 
 # Helpers to break up process_snapshots_for_dataset for Phase 2
 function _normalize_dataset() {
+  # Normalize and compute both filesystem path and ZFS dataset name forms.
   # Args: dataset
   local dataset="$1"
   dataset="${dataset%/}"
@@ -58,6 +59,7 @@ function _normalize_dataset() {
 }
 
 function _should_skip_for_trailing_wildcard() {
+  # Trailing-wildcard handling: may decide to skip this dataset
   # Args: dataset
   # Returns 0 = keep processing, 1 = skip (return from caller)
   local dataset="$1"
@@ -173,14 +175,17 @@ function _psfd_should_process() {
 function _psfd_iterate_snapdirs() {
   local dataset="$1"
   local ds_path="${PSFD_ds_path}"
+  # Enable globbing for snapshot directory expansion
   set +f
   local snapdirs
   snapdirs=$(_build_snapdirs "$ds_path")
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
   for snappath in $snapdirs; do
+    # Process each snapshot path via helper (keeps main function small)
     _process_snappath "$snappath" "$dataset" "$ds_path" "$PSFD_dataset_name" && PSFD_snapshot_found=1 || true
   done
+  # Disable globbing again
   set -f
 }
 

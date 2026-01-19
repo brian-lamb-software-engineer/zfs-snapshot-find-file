@@ -499,6 +499,7 @@ function _isp_finalize() {
   }
 
 # Helpers to split initialize_search_parameters for Phase 2
+# Normalize dataset filesystem path with leading slash for later filesystem operations
 function _normalize_dataset_fs() {
   # Args: datasetpath
   DATASETPATH_FS="$1"

@@ -12,6 +12,7 @@ function _collect_unignored_deleted_snapshots() {
   echo "Snapshot,File_Path,Live_Dataset_Path" > "$acc_deleted_file"
 
   while IFS= read -r dataset; do
+    vlog "zfs-cleanup.sh _collect_unignored_deleted_snapshots processing dataset: ${dataset}"
     local -a snapshots=()
     mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
     [[ ${#snapshots[@]} -eq 0 ]] && continue
@@ -33,6 +34,7 @@ function _collect_unignored_deleted_snapshots() {
             printf "%s,\"%s\",%s\n" "${current_snap}" "${path//\"/\"\"}" "${live_dataset_full_name}" >> "$acc_deleted_file"
             echo "$current_snap" >> "$snap_holding_file"
             ((accidentally_deleted_count++))
+            vlog "zfs-cleanup.sh _collect_unignored_deleted_snapshots found deleted file: ${path} in snapshot ${current_snap}"
           fi
         fi
       done
@@ -57,13 +59,16 @@ function _evaluate_deletion_candidates_and_plan() {
     while IFS= read -r s; do sacred["$s"]=1; done < "$snap_holding_file"
   fi
 
+  vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan START; datasets_file=$datasets_file"
   while IFS= read -r dataset; do
+    vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan processing dataset: ${dataset}"
     local -a snapshots=()
     mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
     [[ ${#snapshots[@]} -eq 0 ]] && continue
 
     for i in "${!snapshots[@]}"; do
       local current_snap="${snapshots[$i]}"
+      vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan evaluating snapshot: ${current_snap}"
       local is_deletion_candidate="true"
 
       if [[ -n "${sacred[$current_snap]}" ]]; then
@@ -98,18 +103,21 @@ function _evaluate_deletion_candidates_and_plan() {
       fi
 
       if [[ "$is_deletion_candidate" == "true" ]]; then
-        echo "WOULD delete this snapshot: ${current_snap}"
-        echo "# /sbin/zfs destroy \"${current_snap}\""
+        echo -e "WOULD delete this snapshot: ${WHITE}${current_snap}${NC}"
+        echo -e "${RED}# /sbin/zfs destroy ${current_snap}${NC}"
         # Append the real destroy command to the plan file (uncommented)
         # Respect --force (SFF_DESTROY_FORCE) by adding -f when requested
         if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
           #echo "/sbin/zfs destroy -f \"${current_snap}\"" >> "$destroy_cmds_tmp"
-          echo "WOULD DESTROY HERE1!"
+          vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan would-destroy (force) ${current_snap}"
+          echo -e "${YELLOW}WOULD DESTROY HERE1!${NC}"
         else
           ##echo "/sbin/zfs destroy \"${current_snap}\"" >> "$destroy_cmds_tmp"
-          echo "WOULD DESTROY HERE2!"
+          vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan would-destroy ${current_snap}"
+          echo -e "${YELLOW}WOULD DESTROY HERE2!${NC}"
         fi
       fi
+      echo ""
     done
   done < "$datasets_file"
 
@@ -126,6 +134,8 @@ function identify_and_suggest_deletion_candidates() {
   local dataset_path_prefix="$1"
   shift
   local -a datasets_array=("$@")
+
+  vlog "zfs-cleanup.sh identify_and_suggest_deletion_candidates START; datasets_count=${#datasets_array[@]} prefix=${dataset_path_prefix}"
 
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
@@ -158,7 +168,7 @@ function identify_and_suggest_deletion_candidates() {
   _collect_unignored_deleted_snapshots "$acc_deleted_file" "$snap_holding_file" "$datasets_file"
 
   echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
-
+  echo ""
   # Phase 2: evaluate candidates and build plan
   _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$destroy_cmds_tmp" "$plan_file"
 
@@ -186,7 +196,7 @@ function identify_and_suggest_deletion_candidates() {
         echo "User declined to execute destroy plan. Plan remains at: $plan_file"
       fi
     else
-      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, re-run with --destroy-snapshots.${NC}"
+      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable DESTROY_SNAPSHOTS=1 in lib/common.sh and re-run with --clean-snapshots.${NC}"
       echo "Destroy plan written to: $plan_file"
     fi
   fi

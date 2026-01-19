@@ -16,7 +16,7 @@ DESTROY_SNAPSHOTS=0
 SFF_DESTROY_FORCE=0
 # CLI-request tracking var for destroy (declared at top so it's visible/configurable)
 REQUEST_DESTROY_SNAPSHOTS=0
-# When a user requested --destroy-snapshots but the top-level master flag is disabled,
+# When a destroy execution was requested but the top-level master flag is disabled,
 # set this so callers can emit a yellow notice near destroy-plan/apply output.
 DESTROY_DISABLED_NOTICE=0
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
@@ -30,12 +30,18 @@ FILENAME_ARR=()
 FILEARR=()
 #LOG_DIR=/tmp #default
 LOG_DIR=/tmp
-RED='\033[0;31m'
-YELLOW='\033[33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+
+# Color codes for output
+COL="\033["
+RED="${COL}0;31m"
+YELLOW="${COL}33m"
+BLUE="${COL}0;34m"
+CYAN="${COL}0;36m"
+GREY="${COL}1;30m"
+WHITE="${COL}1;37m"
+PURPLE="${COL}0;35m"
+GREEN="${COL}0;32m"
+NC="${COL}0m" # No Color
 # Example 1: Ignore cache directories
 # Example 2: Ignore temporary directories
 # Example 3: Ignore macOS specific files
@@ -56,6 +62,7 @@ SNAPREGEX=""
 RECURSIVE=0
 COMPARE=0
 VERBOSE=0
+VVERBOSE=0
 OTHERFILE="" # Although not currently used in core logic, keep for completeness
 DSP_CONSTITUENTS_ARR_CNT=0
 TRAILING_WILDCARD_CNT=0
@@ -81,18 +88,18 @@ function help(){
     -o (optional) <other-file-your-searching--for>
     -s (optional) <snapshot-name-regex-term> (will search all if not specified)
     -r (optional) (recursively search into child datasets)
-    -v (optional) (verbose output)
+    -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
     --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
-    --destroy-snapshots (optional) orchestrate cleanup and attempt to apply destroys (requires DESTROY_SNAPSHOTS to be enabled in lib/common.sh)
+    --destroy-snapshots (removed): destroy execution is controlled via configuration variable `DESTROY_SNAPSHOTS` in `lib/common.sh`
     --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
     -h (this help)
     "
   echo "
     Notes for deletion:
     - By default no destroys are executed. To generate a plan use --clean-snapshots.
-    - To attempt to apply destroys pass --destroy-snapshots. Execution is only permitted if
-      `DESTROY_SNAPSHOTS` is enabled in `lib/common.sh` (this is a permanent switch so
-      destructive execution requires editing that configuration variable).
+    - To attempt to apply destroys enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and then
+      re-run with `--clean-snapshots` to generate/apply the plan. CLI-flag `--destroy-snapshots`
+      has been removed to avoid accidental destructive execution.
     - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
   "
   echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
@@ -122,15 +129,14 @@ function help(){
     #search recursively with verbose, through all datsets snaps, and for all files (short form) (e.g. list all snapshot files)
     snapshots-find-file -d "/pool" -rv'
   echo '
-    # Deletion examples — plan, interactive apply, and force
+    # Deletion examples — plan and force (apply requires enabling DESTROY_SNAPSHOTS in config)
     # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
     snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
 
-    # interactive apply (will prompt before executing the generated plan)
-    snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots -s "*" -f "index.html"
-
+    # To apply a generated plan interactively, enable DESTROY_SNAPSHOTS=1 in lib/common.sh,
+    # then re-run with --clean-snapshots to generate and (after confirmation) execute the plan.
     # force destroy in generated plan (adds -f to zfs destroy when executed)
-    snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots --force -s "*" -f "index.html"
+    snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
 
     # advanced: call cleanup function directly for a subset of datasets (debug)
     bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
@@ -148,6 +154,13 @@ function record_found_file() {
   local file="$1"
   echo "$file" >> "$all_snapshot_files_found_tmp"
   ((found_files_count++))
+}
+
+# Verbose tracing helper: prints when VVERBOSE is enabled
+function vlog() {
+  if [[ ${VVERBOSE:-0} -eq 1 ]]; then
+    echo -e "${BLUE}$@${NC}"
+  fi
 }
 
 # Prompt for confirmation. Returns 0 if confirmed, non-zero otherwise.
@@ -186,7 +199,7 @@ function prompt_confirm() {
 # proximity to the destroy output.
 function print_destroy_disabled_notice() {
   if [[ "${DESTROY_DISABLED_NOTICE:-0}" -eq 1 ]]; then
-    echo -e "${YELLOW}Note: --destroy-snapshots ignored because DESTROY_SNAPSHOTS is disabled in configuration.${NC}"
+    echo -e "${YELLOW}Note: Destroy execution requested but `DESTROY_SNAPSHOTS` is disabled in configuration.${NC}"
   fi
 }
 
@@ -199,21 +212,31 @@ function parse_arguments() {
   local new_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -vv)
+        VVERBOSE=1; shift ;;
       --clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
-      --destroy-snapshots)
-        REQUEST_DESTROY_SNAPSHOTS=1; shift ;;
       --force)
         SFF_DESTROY_FORCE=1; shift ;;
+      --very-verbose|--vv)
+        VVERBOSE=1; shift ;;
+      --*)
+        echo -e "${YELLOW}Unknown option: $1${NC}"
+        echo "Use --clean-snapshots, --force, --very-verbose or see help.";
+        help
+        exit 1
+        ;;
       *) new_args+=("$1"); shift ;;
     esac
   done
   # restore positional args for getopts
   set -- "${new_args[@]}"
-  while getopts ":d:f:o:s:rvhc" ARG; do
+  while getopts ":d:f:o:s:rvhcV" ARG; do
     case "$ARG" in
       v) # echo "Running -$ARG flag for verbose output"
-         VERBOSE=1 ;;
+        VERBOSE=1 ;;
+      V)
+        VVERBOSE=1 ;;
       d) #echo "Running -d flag which is a placeholder to pass a dataset path arg ith it"
          #echo -"$ARG arg is $OPTARG"
          DATASETPATH=$OPTARG ;;
@@ -230,8 +253,6 @@ function parse_arguments() {
          RECURSIVE=1 ;;
       D)
         REQUEST_SNAP_DELETE_PLAN=1 ;;
-      X)
-        REQUEST_DESTROY_SNAPSHOTS=1 ;;
       c)
          COMPARE=1 ;;
       h) help ;;
@@ -242,6 +263,15 @@ function parse_arguments() {
 
   # set back $1 index
   shift "$((OPTIND-1))"
+
+  # Defensive validation: if the dataset path looks like an option (starts with '-')
+  # it likely means argument parsing shifted incorrectly or the user mis-quoted.
+  if [[ -n "$DATASETPATH" && "${DATASETPATH:0:1}" == "-" ]]; then
+    echo -e "${RED}Error: dataset path appears to be an option: ${DATASETPATH}${NC}"
+    echo "Check quoting and argument ordering. See help below:";
+    help
+    exit 1
+  fi
 
   # Respect top-level allow flags: if the admin has permanently disabled
   # delete/destroy by setting the top-level variables to 0, ignore CLI
@@ -294,11 +324,11 @@ function initialize_search_parameters() {
   _normalize_dataset_fs "$DATASETPATH"
 
   # Debugging output for key variables
-  [[ $VERBOSE == 1 ]] && echo "Initializing search parameters..."
-  [[ $VERBOSE == 1 ]] && echo "Dataset path: $DATASETPATH_FS"
-  [[ $VERBOSE == 1 ]] && echo "File pattern: $FILENAME"
-  [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
-  [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Initializing search parameters...${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Dataset path: $DATASETPATH_FS${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}File pattern: $FILENAME${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Snapshot regex: $SNAPREGEX${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Recursive flag: $RECURSIVE${NC}"
 
   # Ensure compare mode implies recursive discovery for safety
   _ensure_compare_recursive
@@ -368,7 +398,7 @@ function initialize_search_parameters() {
       for ds in "${DATASETS[@]}"; do
         ds_disp+=("/${ds#/}")
       done
-      echo "Discovered datasets: ${ds_disp[*]}"
+      echo -e "Discovered datasets: ${WHITE}${ds_disp[*]}${NC}"
     fi
 
     # Restore disabled globbing

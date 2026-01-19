@@ -5,6 +5,7 @@ Purpose
 - Detect potentially accidentally deleted files on live datasets by comparing live dataset contents to snapshot contents.
 - If you see functions that are >60 lines, break them out.  
 - When breaking out functions, if you see pieces in that function that are being called from multiple places, break that piece out to its own function, and place it on common.sh, then call it, instead of its code from those multiple places. 
+- avoid usage of ENV Variables, we dont need to code in functionality for that. 
 
 Scope (Phase 1)
 - Catalog and inspect the current codebase split across `snapshots-find-file` ("sff") and `lib/*.sh`.
@@ -14,7 +15,7 @@ AGENT: see copilot-context.md for instructions first
 AGENT: do not remove my comments, keep them above the lines they belong to.  if that ends up being an arracy or code block that cant take comments, but it immediately above that block. 
 
 Goals (Phase 1 — Cataloging)
-- Keep code DRY: treat `lib/common.sh` as the shared utilities file (special case) used by other `lib/*.sh` files.
+- Keep all code DRY: treat `lib/common.sh` as the shared utilities file (special case) used by other `lib/*.sh` files.
 - Do not modify behaviour or move code in this phase; only identify code that has not yet been moved off `snapshots-find-file` into `lib/`.
 - Build an actionable mapping of which functions live in which files and list any residual code in `snapshots-find-file` that still needs extraction.
 - Safe defaults: confirm no destructive operations will be executed as part of cataloging.

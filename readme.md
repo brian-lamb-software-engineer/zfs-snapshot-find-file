@@ -41,17 +41,25 @@ Usage examples:
 This writes an executable plan at `/tmp/destroy-plan-<timestamp>.sh` and prints suggested `WOULD delete` lines to the CLI for review.
 
 - Interactive apply (prompted):
+- Apply generated plan (prompted):
+
+To apply a generated destroy plan interactively you must:
+
+1. Enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` (this is an explicit configuration gate).
+2. Re-run the plan generation and apply flow using `--clean-snapshots` and confirm when prompted.
+
+Example (generate plan and apply after enabling `DESTROY_SNAPSHOTS`):
 
 ```bash
-./snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots -s "*" -f "index.html"
+./snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
 ```
 
-The script will prompt `Execute destroy plan now? [y/N]` before executing the generated plan. A log of executed destroys is written to `/tmp/destroy-exec-<timestamp>.log`.
+When enabled and confirmed, executed destroys are logged to `/tmp/destroy-exec-<timestamp>.log`.
 
-- Force option (adds `-f` to generated `zfs destroy` commands):
+- Force option (adds `-f` to generated `zfs destroy` commands when the plan is executed):
 
 ```bash
-./snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots --force -s "*" -f "index.html"
+./snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
 ```
 
 
@@ -146,6 +154,22 @@ These changes fix duplicate/relative vs absolute dataset handling and ensure the
 Additional runtime fixes applied during Phase 1 testing:
 - `lib/common.sh` / `build_file_pattern()`: switched to a tokenized `FILEARR` so `find` receives `-name` and `-o` tokens as separate arguments; this fixes multi-`-f` and quoting/tokenization bugs.
 - `discover_datasets()`: removed an extra `tail -n +2` from the recursive `zfs list` call which could cause the parent or first dataset to be omitted from discovery.
+
+## Color Standard
+
+When contributing to this project, follow the color conventions below so CLI output is consistent and readable in dark terminals.
+
+- No color / Reset: `NC`
+- Errors / Fatal: `RED`
+- Warnings / Notices: `YELLOW`
+- Informational / compare messages: `CYAN`
+- Files (search results): `GREEN`
+- ZFS identifiers (datasets, snapshots): `WHITE`
+- `-v` (regular verbose): `GREY` (subtle, low-contrast informational lines)
+- `-vv` (very-verbose / tracing): `BLUE` (function-entry tracing)
+
+Apply these constants using the variables defined in `lib/common.sh` (`RED`, `YELLOW`, `CYAN`, `GREEN`, `WHITE`, `GREY`, `BLUE`, `NC`).
+
 
 ---
 

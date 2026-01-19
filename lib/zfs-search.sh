@@ -32,6 +32,8 @@ function _handle_noncompare_snapdir() {
   local found_tmp
   found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
 
+  vlog "zfs-search.sh _handle_noncompare_snapdir called for dataset=${dataset} snappath=${snappath}"
+
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
   if [[ -s "$found_tmp" ]]; then
     while IFS= read -r -d '' file; do
@@ -107,17 +109,19 @@ function _process_snappath() {
     return 0
   fi
 
+  vlog "zfs-search.sh _process_snappath dataset=${dataset} ds_path=${ds_path} snappath=${snappath}"
+
   local SNAPNAME=$(/bin/basename "$snappath")
   [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "Skipping symlink: ${snappath}" && return 0
 
-  [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${YELLOW}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
+  [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${WHITE}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
 
   if ! _matches_snapshot_regex "$SNAPNAME"; then
     [[ $VERBOSE == 1 ]] && echo "Skipping, doesn't match -s regex"
     return 0
   fi
 
-  [[ $VERBOSE == 1 ]] && echo -e "Search path:(${BLUE}$snappath${NC})"
+  [[ $VERBOSE == 1 ]] && echo -e "Search path:(${CYAN}$snappath${NC})"
 
   ##
   # NEW FUNCTIONALITY MODIFICATION BEGIN: Conditional find command execution & bugfix
@@ -140,11 +144,12 @@ function _process_snappath() {
 function process_snapshots_for_dataset() {
   local dataset="$1"
 
+  vlog "zfs-search.sh process_snapshots_for_dataset START dataset=${dataset}"
   # Normalize and compute both filesystem path and ZFS dataset name forms.
   IFS='|' read -r ds_path dataset_name < <(_normalize_dataset "$dataset")
 
-  [[ $VERBOSE == 1 ]] && echo "Processing dataset: $dataset_name (path: $ds_path)"
-  [[ $VERBOSE == 1 ]] && echo "Using ZFSSNAPDIR: $ZFSSNAPDIR"
+  [[ $VERBOSE == 1 ]] && echo -e "Processing dataset: ${WHITE}$dataset_name${NC} (path: ${WHITE}$ds_path${NC})"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Using ZFSSNAPDIR: $ZFSSNAPDIR${NC}"
 
   # Trailing-wildcard handling: may decide to skip this dataset
   if ! _should_skip_for_trailing_wildcard "$dataset"; then

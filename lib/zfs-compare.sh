@@ -7,12 +7,23 @@ function _gather_live_files() {
   local live_dataset_path="$1"
   local tmp_base="$2"
   local live_files_tmp
-  live_files_tmp=$(mktemp "${tmp_base}/live_files.XXXXXX")
+  # Ensure tmp_base exists and mktemp can create files there. Fall back to
+  # a predictable file if mktemp fails to avoid returning an empty path.
+  mkdir -p "$tmp_base" 2>/dev/null || true
+  if ! live_files_tmp=$(mktemp "${tmp_base}/live_files.XXXXXX" 2>/dev/null); then
+    live_files_tmp="${tmp_base}/live_files.fallback.${TIMESTAMP}"
+    : > "$live_files_tmp" || return 1
+  fi
   # Use -L to dereference symlinks to ensure we get actual file paths.
   # Using -print0 and xargs -0 for robust handling of special characters in filenames.
   #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
   # Use -print0 and xargs -0 to handle special chars robustly
-  /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
+  # Run the find pipeline and write results to the temp file. If the pipeline
+  # fails, ensure the temp file still exists so callers don't error when reading.
+  /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp" 2>/dev/null || true
+  if [[ ! -f "$live_files_tmp" ]]; then
+    : > "$live_files_tmp" || return 1
+  fi
   echo "$live_files_tmp"
 }
 
@@ -123,7 +134,15 @@ function compare_snapshot_files_to_live_dataset() {
   local live_files_tmp
   live_files_tmp=$(_gather_live_files "$live_dataset_path" "$tmp_base")
 
-  [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Live dataset file count: $(wc -l < \"$live_files_tmp\")${NC}"
+  if [[ $VERBOSE == 1 ]]; then
+    if [[ -f "$live_files_tmp" ]]; then
+      local live_count
+      live_count=$(wc -l < "$live_files_tmp" 2>/dev/null || echo 0)
+    else
+      live_count=0
+    fi
+    echo -e "${BLUE}Live dataset file count: ${live_count}${NC}"
+  fi
 
   # Counters for summary
   local total_snapshot_entries=0

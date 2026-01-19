@@ -162,23 +162,28 @@ function identify_and_suggest_deletion_candidates() {
   # Phase 2: evaluate candidates and build plan
   _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$destroy_cmds_tmp" "$plan_file"
 
-  # If plan exists and user opted into apply, enforce environment guard
+  # If plan exists and user requested apply, prompt first then respect master flag
   if [[ -s "$destroy_cmds_tmp" ]]; then
-    if [[ "${DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
-      # Enforce top-level allow flag: if config explicitly disables destroy
-      # execution, never run destroys regardless of CLI flags.
-      if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
-        echo -e "${YELLOW}Execution blocked: DESTROY_SNAPSHOTS is disabled in configuration. To permit execution, edit lib/common.sh and set DESTROY_SNAPSHOTS=1.${NC}"
-        echo "Destroy plan written to: $plan_file"
-      else
-        # Ask for confirmation before executing
-        if prompt_confirm "Execute destroy plan now?" "n"; then
-          local exec_log="$tmp_base/destroy-exec-$TIMESTAMP.log"
-          echo "Executing destroy plan; logging to: $exec_log"
-          bash "$plan_file" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
+    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+      # Prompt the user before checking the permanent master switch so the
+      # user can validate the plan and exercise the interactive flow.
+      if prompt_confirm "Execute destroy plan now?" "n"; then
+        # After confirmation, ensure the top-level master switch is enabled.
+        if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
+          echo -e "${YELLOW}Execution blocked: DESTROY_SNAPSHOTS is disabled in configuration. To permit execution, edit lib/common.sh and set DESTROY_SNAPSHOTS=1.${NC}"
+          echo "Destroy plan written to: $plan_file"
         else
-          echo "User declined to execute destroy plan. Plan remains at: $plan_file"
+          local exec_log="$tmp_base/destroy-exec-$TIMESTAMP.log"
+          local exec_plan="$tmp_base/destroy-plan-exec-$TIMESTAMP.sh"
+          # Create an executable plan by uncommenting destroy lines that begin
+          # with '# /sbin/zfs destroy'. Preserve other comments (e.g., header).
+          sed 's/^# \/sbin\/zfs destroy/\/sbin\/zfs destroy/' "$plan_file" > "$exec_plan"
+          chmod 700 "$exec_plan" || true
+          echo "Executing destroy plan; logging to: $exec_log"
+          bash "$exec_plan" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
         fi
+      else
+        echo "User declined to execute destroy plan. Plan remains at: $plan_file"
       fi
     else
       echo -e "${YELLOW}Dry-run: no destroys executed. To apply, re-run with --destroy-snapshots.${NC}"

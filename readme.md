@@ -26,7 +26,7 @@ The tool supports conservative, flag-driven snapshot cleanup workflows. By defau
 
 Terminology and safety
 
-- `--delete-snapshots` (plan-only) generates a destroy plan but does not execute it. The plan-only behavior is controlled by the internal configuration variable `SFF_DELETE_PLAN` in `lib/common.sh`.
+ - `--clean-snapshots` (plan-only) generates a destroy plan but does not execute it. The plan-only behavior is controlled by the internal configuration variable `SFF_DELETE_PLAN` in `lib/common.sh`.
 - `--destroy-snapshots` requests execution of the generated plan, but actual execution requires the master switch `DESTROY_SNAPSHOTS` to be enabled in `lib/common.sh` (this is a deliberate, permanent guard — edit the file to enable destructive execution). The script will prompt interactively before executing the plan.
 - There is no environment-variable override used by the script; this design ensures a config edit is required to permit destructive runs.
 
@@ -35,7 +35,7 @@ Usage examples:
 - Generate suggestions and a destroy-plan (dry-run):
 
 ```bash
-./snapshots-find-file -c -d "/nas/live/cloud" --delete-snapshots -s "*" -f "index.html"
+./snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
 ```
 
 This writes an executable plan at `/tmp/destroy-plan-<timestamp>.sh` and prints suggested `WOULD delete` lines to the CLI for review.
@@ -57,7 +57,7 @@ The script will prompt `Execute destroy plan now? [y/N]` before executing the ge
 
 Notes:
 
-- The tool is intentionally conservative — test with `--delete-snapshots` (plan-only) before attempting to execute any destroys.
+- The tool is intentionally conservative — test with `--clean-snapshots` (plan-only) before attempting to execute any destroys.
 - There is no non-interactive `--yes` option; interactive confirmation is required before plan execution when `DESTROY_SNAPSHOTS` is enabled.
 
 

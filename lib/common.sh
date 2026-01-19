@@ -3,12 +3,22 @@
 
 # Common variables, constants, and utility functions
 FILESTR=""
-# Plan-only delete flag (creates a destroy plan but does not execute it)
+# Plan-only delete flag (creates a destroy plan but does not execute it).
+# NOTE: This is a config-level setting. To generate plans set this to 1
+# or pass --clean-snapshots; editing this file is the permanent switch.
 SFF_DELETE_PLAN=1
-# Master destroy execution flag (must be explicitly enabled in config)
+
+# Master destroy execution flag (must be explicitly enabled in config).
+# WARNING: This is the master switch for destructive execution. Do NOT
+# enable it via runtime flags — edit this file to set `DESTROY_SNAPSHOTS=1`.
 DESTROY_SNAPSHOTS=0
 # Deletion / destroy flags (safe defaults)
 SFF_DESTROY_FORCE=0
+# CLI-request tracking var for destroy (declared at top so it's visible/configurable)
+REQUEST_DESTROY_SNAPSHOTS=0
+# When a user requested --destroy-snapshots but the top-level master flag is disabled,
+# set this so callers can emit a yellow notice near destroy-plan/apply output.
+DESTROY_DISABLED_NOTICE=0
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
 # Set these to 0 here to permanently disable plan/apply unless this file is edited.
 SFF_DELETE_PLAN_ALLOWED=${SFF_DELETE_PLAN}
@@ -72,14 +82,14 @@ function help(){
     -s (optional) <snapshot-name-regex-term> (will search all if not specified)
     -r (optional) (recursively search into child datasets)
     -v (optional) (verbose output)
-    --delete-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
+    --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
     --destroy-snapshots (optional) orchestrate cleanup and attempt to apply destroys (requires DESTROY_SNAPSHOTS to be enabled in lib/common.sh)
     --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
     -h (this help)
     "
   echo "
     Notes for deletion:
-    - By default no destroys are executed. To generate a plan use --delete-snapshots.
+    - By default no destroys are executed. To generate a plan use --clean-snapshots.
     - To attempt to apply destroys pass --destroy-snapshots. Execution is only permitted if
       `DESTROY_SNAPSHOTS` is enabled in `lib/common.sh` (this is a permanent switch so
       destructive execution requires editing that configuration variable).
@@ -114,7 +124,7 @@ function help(){
   echo '
     # Deletion examples — plan, interactive apply, and force
     # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
-    snapshots-find-file -c -d "/nas/live/cloud" --delete-snapshots -s "*" -f "index.html"
+    snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
 
     # interactive apply (will prompt before executing the generated plan)
     snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots -s "*" -f "index.html"
@@ -170,6 +180,16 @@ function prompt_confirm() {
   esac
 }
 
+# Print a yellow warning if the user requested `--destroy-snapshots` but the
+# top-level `DESTROY_SNAPSHOTS_ALLOWED` is disabled. Callers (cleanup) should
+# invoke this just above any destroy-plan messages so the notice appears in
+# proximity to the destroy output.
+function print_destroy_disabled_notice() {
+  if [[ "${DESTROY_DISABLED_NOTICE:-0}" -eq 1 ]]; then
+    echo -e "${YELLOW}Note: --destroy-snapshots ignored because DESTROY_SNAPSHOTS is disabled in configuration.${NC}"
+  fi
+}
+
 function parse_arguments() {
   # CRUCIAL FIX: Reset OPTIND to 1 before calling getopts.
   # This ensures getopts always starts parsing from the first argument,
@@ -179,8 +199,8 @@ function parse_arguments() {
   local new_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --delete-snapshots)
-        REQUEST_SFF_DELETE_PLAN=1; shift ;;
+      --clean-snapshots)
+        REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --destroy-snapshots)
         REQUEST_DESTROY_SNAPSHOTS=1; shift ;;
       --force)
@@ -209,7 +229,7 @@ function parse_arguments() {
       r)
          RECURSIVE=1 ;;
       D)
-        REQUEST_SFF_DELETE_PLAN=1 ;;
+        REQUEST_SNAP_DELETE_PLAN=1 ;;
       X)
         REQUEST_DESTROY_SNAPSHOTS=1 ;;
       c)
@@ -228,19 +248,22 @@ function parse_arguments() {
   # requests. This makes the top-level setting a hard switch that must be
   # edited in the file to enable destructive behavior.
   if [[ "${SFF_DELETE_PLAN_ALLOWED:-1}" -eq 0 ]]; then
-    if [[ "${REQUEST_SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
-      echo -e "${YELLOW}Note: --delete-snapshots ignored because destroy-plan generation is disabled in configuration.${NC}"
+    if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
+      echo -e "${YELLOW}Note: --clean-snapshots ignored because destroy-plan generation is disabled in configuration.${NC}"
     fi
     SFF_DELETE_PLAN=0
   else
-    if [[ "${REQUEST_SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
+    if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
       SFF_DELETE_PLAN=1
     fi
   fi
 
   if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
     if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
-      echo -e "${YELLOW}Note: --destroy-snapshots ignored because DESTROY_SNAPSHOTS is disabled in configuration.${NC}"
+      # Defer printing the yellow notice until destroy-plan/apply output so it
+      # appears near the destroy messages (callers should invoke
+      # `print_destroy_disabled_notice` before printing destroy lines).
+      DESTROY_DISABLED_NOTICE=1
     fi
     DESTROY_SNAPSHOTS=0
   else
@@ -351,26 +374,6 @@ function initialize_search_parameters() {
     # Restore disabled globbing
     set -f
   }
-
-  # Prompt the user for a yes/no confirmation. Returns 0 for yes, 1 for no.
-  function prompt_confirm() {
-    local prompt_msg="$1"
-    local default_answer="$2" # 'y' or 'n'
-    local reply
-    if [[ -n "$default_answer" && "$default_answer" == "y" ]]; then
-      read -r -p "$prompt_msg [Y/n]: " reply
-      reply=${reply:-Y}
-    else
-      read -r -p "$prompt_msg [y/N]: " reply
-      reply=${reply:-N}
-    fi
-
-    case "$reply" in
-      Y|y) return 0 ;;
-      *) return 1 ;;
-    esac
-  }
-
   ## Normalize a dataset string to ZFS-name form (no leading/trailing slash)
   function normalize_dataset_name() {
     local ds="$1"

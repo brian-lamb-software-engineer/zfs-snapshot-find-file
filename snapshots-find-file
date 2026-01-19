@@ -34,7 +34,7 @@ if [[ $COMPARE == 1 ]]; then
   compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH_FS" "${DATASETS[@]}"
   log_snapshot_deltas "$DATASETPATH_FS" "${DATASETS[@]}"
   # Note: Do not automatically suggest snapshot deletions during compare/search
-  # unless explicitly requested via --delete-snapshots or --destroy-snapshots.
+  # unless explicitly requested via --clean-snapshots or --destroy-snapshots.
   echo -e "${BLUE}Comparison process complete.${NC}"
 
   # If user requested deletion orchestration, run the cleanup flow now.

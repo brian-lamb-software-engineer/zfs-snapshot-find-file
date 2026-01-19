@@ -50,74 +50,68 @@ function _csfld_process_sorted() {
 
   vlog "zfs-compare.sh _csfld_process_sorted sorted=${sorted_snapshot_files_tmp} live=${live_files_tmp} log=${log_file} ignored=${ignored_log_file}"
 
-  # The processing loop below was extracted from the original
-  # `compare_snapshot_files_to_live_dataset()` to keep that function
-  # under the 60-line limit. The comments here explain the original
-  # intent and the semantics expected by callers.
-  #
-  # Input format: each line in ${sorted_snapshot_files_tmp} is a pipe-delimited
-  # record: live_equivalent_path|snapshot_name|creation_epoch
-  # The file is sorted so that the newest snapshot for any given path appears
-  # first; we thus report the newest snapshot occurrence and skip duplicates.
-  # We also check ignore patterns and record unique ignored paths separately.
-
   local total_snapshot_entries=0
   local ignored_files_count=0
   local found_in_live_count=0
   local missing_files_count=0
   local skipped_reported_files_count=0
 
-  # Read each sorted record; use robust IFS/read pattern to preserve paths
-  # that may contain spaces or special characters.
+  # Iterate sorted records and delegate classification to helper to keep this
+  # function concise and focused on counting/aggregation.
   while IFS='|' read -r live_equivalent_path snap_name creation_time_epoch || [[ -n "$live_equivalent_path" ]]; do
-    # Count processed snapshot entries
     ((total_snapshot_entries++))
-
-    # Defensive: skip empty path records
-    if [[ -z "$live_equivalent_path" ]]; then
-      continue
-    fi
-
-    # If we've already reported this path (we only report the newest snapshot
-    # occurrence due to sorting), skip duplicate reporting and increment counter.
+    [[ -z "$live_equivalent_path" ]] && continue
     if grep -Fxq "$live_equivalent_path" "$seen_paths_tmp" 2>/dev/null; then
       ((skipped_reported_files_count++))
       continue
     fi
 
-    # Check against ignore patterns first; log each ignored path once.
-    local ignore_match=0
-    for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
-      if [[ "$live_equivalent_path" =~ $pattern ]]; then
-        # Record unique ignored files to the ignored_log_file
-        if ! grep -Fxq "$live_equivalent_path" "$seen_ignored_paths_tmp" 2>/dev/null; then
-          echo "$live_equivalent_path (ignored by pattern: '$pattern')" >> "$ignored_log_file"
-          echo "$live_equivalent_path" >> "$seen_ignored_paths_tmp"
-          ((ignored_files_count++))
-        fi
-        [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}"
-        ignore_match=1
-        break
-      fi
-    done
-
-    # If not ignored, check whether this path exists in the live dataset index.
-    # If it does, mark as seen to avoid future duplicates; otherwise log it
-    # as missing (present only in snapshots) to the main log file.
-    if [[ $ignore_match -eq 0 ]]; then
-      if grep -Fxq "$live_equivalent_path" "$live_files_tmp" 2>/dev/null; then
-        ((found_in_live_count++))
-        echo "$live_equivalent_path" >> "$seen_paths_tmp"
-      else
-        echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" | tee -a "$log_file"
-        echo "$live_equivalent_path" >> "$seen_paths_tmp"
-        ((missing_files_count++))
-      fi
-    fi
+    local result
+    result=$(_csfld_check_path "$live_equivalent_path" "$snap_name" "$live_files_tmp" "$log_file" "$ignored_log_file" "$seen_paths_tmp" "$seen_ignored_paths_tmp")
+    case "$result" in
+      IGNORED) ((ignored_files_count++)) ;;
+      FOUND) ((found_in_live_count++)) ;;
+      MISSING) ((missing_files_count++)) ;;
+      *) ;;
+    esac
   done < "$sorted_snapshot_files_tmp"
 
   # Emit counters: total ignored found missing skipped
   echo "$total_snapshot_entries $ignored_files_count $found_in_live_count $missing_files_count $skipped_reported_files_count"
+}
+
+function _csfld_check_path() {
+  # Args: live_equivalent_path snap_name live_files_tmp log_file ignored_log_file seen_paths_tmp seen_ignored_paths_tmp
+  local live_equivalent_path="$1"
+  local snap_name="$2"
+  local live_files_tmp="$3"
+  local log_file="$4"
+  local ignored_log_file="$5"
+  local seen_paths_tmp="$6"
+  local seen_ignored_paths_tmp="$7"
+
+  # Check ignore patterns first, log unique ignored entries
+  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+    if [[ "$live_equivalent_path" =~ $pattern ]]; then
+      if ! grep -Fxq "$live_equivalent_path" "$seen_ignored_paths_tmp" 2>/dev/null; then
+        echo "$live_equivalent_path (ignored by pattern: '$pattern')" >> "$ignored_log_file"
+        echo "$live_equivalent_path" >> "$seen_ignored_paths_tmp"
+      fi
+      [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}"
+      printf '%s' "IGNORED"
+      return 0
+    fi
+  done
+
+  # Not ignored: check live dataset index
+  if grep -Fxq "$live_equivalent_path" "$live_files_tmp" 2>/dev/null; then
+    echo "$live_equivalent_path" >> "$seen_paths_tmp"
+    printf '%s' "FOUND"
+  else
+    echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" | tee -a "$log_file"
+    echo "$live_equivalent_path" >> "$seen_paths_tmp"
+    printf '%s' "MISSING"
+  fi
 }
 
 function _process_diff_pair() {
@@ -189,7 +183,7 @@ function compare_snapshot_files_to_live_dataset() {
   local raw_snapshot_file_list_tmp="$1" # Expects file with live_equivalent_path|snap_name|timestamp
   local live_dataset_path="$2"
   vlog "zfs-compare.sh compare_snapshot_files_to_live_dataset raw=${raw_snapshot_file_list_tmp} live=${live_dataset_path}"
-  # Use LOG_DIR (configurable) or fall back to $TMPDIR or /tmp to avoid filling the current CWD
+
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
   local log_file="$tmp_base/comparison-$TIMESTAMP.out"
   local ignored_log_file="$tmp_base/compare-ignore-$TIMESTAMP.out"
@@ -197,26 +191,22 @@ function compare_snapshot_files_to_live_dataset() {
   echo -e "${CYAN}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}"
   echo "Comparison initiated on $(date)" > "$log_file"
   echo "Live dataset path: $live_dataset_path" >> "$log_file"
-  echo "Ignored patterns:" >> "$log_file"
-  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
-    echo "  - $pattern" >> "$log_file"
-  done
-  echo "" >> "$log_file"
-  echo "Files missing from live dataset but present in snapshot(s):" >> "$log_file"
-  echo "------------------------------------------------------------" >> "$log_file"
-  echo -e "${CYAN}Logging ignored files to:${NC} ${YELLOW}$ignored_log_file${NC}"
-  # Only warn about ignores if the user supplied/overrode ignore patterns
-  local _default_join
-  local _current_join
-  _default_join="${DEFAULT_IGNORE_REGEX_PATTERNS[*]:-}"
-  _current_join="${IGNORE_REGEX_PATTERNS[*]:-}"
-  if [[ -n "$_current_join" && "$_current_join" != "$_default_join" ]]; then
-    echo -e "${YELLOW}Warning: Ignore patterns may hide snapshot-only files; review ${ignored_log_file} for ignored entries.${NC}"
-  fi
-  echo "Unique Ignored Files (matching patterns in IGNORE_REGEX_PATTERNS):" > "$ignored_log_file"
-  echo "------------------------------------------------------------" >> "$log_file"
 
-  # 1. Get all files in the current live dataset
+  # Delegate work to a small prepare-and-run helper that returns counters
+  read total_snapshot_entries ignored_files_count found_in_live_count missing_files_count skipped_reported_files_count < <(_csfld_prepare_and_run "$raw_snapshot_file_list_tmp" "$live_dataset_path" "$tmp_base" "$log_file" "$ignored_log_file")
+
+  # Write final summary via helper
+  _csfld_write_summary "$tmp_base" "$log_file" "$ignored_log_file" "$total_snapshot_entries" "$ignored_files_count" "$found_in_live_count" "$missing_files_count" "$skipped_reported_files_count"
+}
+
+function _csfld_prepare_and_run() {
+  # Args: raw_snapshot_file_list_tmp live_dataset_path tmp_base log_file ignored_log_file
+  local raw_snapshot_file_list_tmp="$1"
+  local live_dataset_path="$2"
+  local tmp_base="$3"
+  local log_file="$4"
+  local ignored_log_file="$5"
+
   [[ $VERBOSE == 1 ]] && echo -e "${CYAN}Gathering live dataset files from: ${WHITE}$live_dataset_path${NC}"
   local live_files_tmp
   live_files_tmp=$(_gather_live_files "$live_dataset_path" "$tmp_base")
@@ -231,37 +221,9 @@ function compare_snapshot_files_to_live_dataset() {
     echo -e "${CYAN}Live dataset file count: ${live_count}${NC}"
   fi
 
-  # Counters for summary
-  local total_snapshot_entries=0
-  local ignored_files_count=0
-  local found_in_live_count=0
-  local missing_files_count=0
-  local skipped_reported_files_count=0
-
-  # Temporary file to track paths already reported to avoid duplicates in main log
-  local seen_paths_tmp
-  seen_paths_tmp=$(mktemp "${tmp_base}/seen_paths.XXXXXX")
-  #TODO figure out why the message below says "already reported" then clarify that reason or fix it
-  # make it say 0 if its zero, right now i see an empty string ($skipped_reported)
-  # Temporary file to track unique ignored paths for the ignored_log_file
-  local seen_ignored_paths_tmp
-  seen_ignored_paths_tmp=$(mktemp "${tmp_base}/seen_ignored_paths.XXXXXX")
-
-  # Sort the raw snapshot file list by live_equivalent_path then by creation_timestamp (NEWEST first)
-  # This ensures that when a path is encountered, it's the one from the newest snapshot.
-  # Using | as delimiter for sort. -k1,1 ensures sorting on the first field (path),
-  # -k3,3nr on the third field (timestamp) numerically in reverse (newest first).
   local sorted_snapshot_files_tmp
   sorted_snapshot_files_tmp=$(_sort_snapshot_files "$raw_snapshot_file_list_tmp" "$tmp_base")
-  # Read sorted snapshot file paths (path|snap_name|timestamp)
-  # Delegate processing to helper to reduce function length
-  # Prepare seen files temporary trackers
-  # Temporary trackers used during sorted processing:
-  # - seen_paths_tmp: records paths already reported so duplicates (newer snapshots)
-  #   are skipped.  This prevents reporting the same live-equivalent path multiple
-  #   times when multiple snapshots contain it (we prefer the newest snapshot).
-  # - seen_ignored_paths_tmp: records ignored paths already logged to avoid
-  #   duplicates in the ignored-log output.
+
   local seen_paths_tmp
   seen_paths_tmp=$(mktemp "${tmp_base}/seen_paths.XXXXXX")
   local seen_ignored_paths_tmp
@@ -269,18 +231,26 @@ function compare_snapshot_files_to_live_dataset() {
 
   read total_snapshot_entries ignored_files_count found_in_live_count missing_files_count skipped_reported_files_count < <(_csfld_process_sorted "$sorted_snapshot_files_tmp" "$live_files_tmp" "$log_file" "$ignored_log_file" "$seen_paths_tmp" "$seen_ignored_paths_tmp")
 
-  # Cleanup temp trackers (counters retained)
-  # We intentionally remove these ephemeral files here; the counters returned
-  # above have already captured summary values written by the helper.
-  rm -f "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
+  rm -f "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp" || true
+  rm -f "$live_files_tmp" || true
+
+  echo "$total_snapshot_entries $ignored_files_count $found_in_live_count $missing_files_count $skipped_reported_files_count"
+}
+
+function _csfld_write_summary() {
+  # Args: tmp_base log_file ignored_log_file total ignored found missing skipped
+  local tmp_base="$1"
+  local log_file="$2"
+  local ignored_log_file="$3"
+  local total_snapshot_entries="$4"
+  local ignored_files_count="$5"
+  local found_in_live_count="$6"
+  local missing_files_count="$7"
+  local skipped_reported_files_count="$8"
 
   echo "" >> "$ignored_log_file"
   echo "Ignored files cataloging finished." >> "$ignored_log_file"
 
-  # Cleanup temporary files (counters retained for final summary)
-  rm -f "$live_files_tmp" "$seen_paths_tmp" "$seen_ignored_paths_tmp" "$sorted_snapshot_files_tmp"
-
-  # Aggregate summary (printed last for CLI readability)
   echo -e "${CYAN}Writing comparison summary to logs...${NC}"
   {
     echo "--- Comparison Summary ---"
@@ -292,11 +262,9 @@ function compare_snapshot_files_to_live_dataset() {
     echo ""
   } >> "$log_file"
 
-  # Append summary to ignored log as well
   echo "--- Ignored Summary ---" >> "$ignored_log_file"
   echo "Ignored entries count: $ignored_files_count" >> "$ignored_log_file"
 
-  # Write a small CSV summary for tooling/automation
   local summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
   {
     echo "metric,value"
@@ -308,7 +276,6 @@ function compare_snapshot_files_to_live_dataset() {
   } > "$summary_csv"
 
   echo "Wrote summary to: $summary_csv" >> "$log_file"
-
 }
 
 function log_snapshot_deltas() {
@@ -345,37 +312,37 @@ function log_snapshot_deltas() {
 
   # Add CSV header at the top of the delta log for easy parsing
   echo "Type,File_Path,Is_Ignored,Comparison_Context,Full_Parent_Snap,Full_Current_Snap" >> "$delta_log_file"
-
   # Iterate datasets (already filtered by recursive/wildcard logic in main script)
   for dataset in "${datasets_array[@]}"; do
-    [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Analyzing deltas for dataset: ${WHITE}$dataset${NC}"
-    echo "--- Dataset: $dataset ---" >> "$delta_log_file"
-
-    # Get snapshots for this dataset, sorted by creation time ASCENDING (oldest to newest)
-    # We will iterate and build parent/child pairs
-    # Delegate snapshot listing to helper to keep this function small
-    local -a all_compare_points=()
-    mapfile -t all_compare_points < <(_get_all_compare_points "$dataset")
-
-    # If there's only one item (just the live dataset or no snapshots), skip diffing pairs
-    if [[ ${#all_compare_points[@]} -lt 2 ]]; then
-      echo "  No snapshots or only live dataset for $dataset. Skipping delta comparisons." >> "$delta_log_file"
-      continue
-    fi
-
-    # Iterate through comparison pairs (oldest snapshot to next, newest snapshot to live)
-    for (( i=0; i<${#all_compare_points[@]}-1; i++ )); do
-      local parent_compare_point="${all_compare_points[i]}"
-      local current_compare_point="${all_compare_points[i+1]}"
-      local comparison_context="${parent_compare_point} to ${current_compare_point}"
-
-      echo "\n--- Delta for: ${current_compare_point} (compared to ${parent_compare_point}) ---" >> "$delta_log_file"
-      [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing ${WHITE}${current_compare_point} ${YELLOW}to ${WHITE}${parent_compare_point}${NC}"
-
-      # Use zfs diff to get changes
-        # Delegate diff processing to helper to keep this function small
-        _process_diff_pair "$parent_compare_point" "$current_compare_point" "$delta_log_file"
-    done
+    _lsd_process_dataset "$dataset" "$delta_log_file"
   done
   echo "\nDelta analysis finished." >> "$delta_log_file"
+}
+
+function _lsd_process_dataset() {
+  # Args: dataset delta_log_file
+  local dataset="$1"
+  local delta_log_file="$2"
+
+  [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Analyzing deltas for dataset: ${WHITE}$dataset${NC}"
+  echo "--- Dataset: $dataset ---" >> "$delta_log_file"
+
+  local -a all_compare_points=()
+  mapfile -t all_compare_points < <(_get_all_compare_points "$dataset")
+
+  if [[ ${#all_compare_points[@]} -lt 2 ]]; then
+    echo "  No snapshots or only live dataset for $dataset. Skipping delta comparisons." >> "$delta_log_file"
+    return
+  fi
+
+  for (( i=0; i<${#all_compare_points[@]}-1; i++ )); do
+    local parent_compare_point="${all_compare_points[i]}"
+    local current_compare_point="${all_compare_points[i+1]}"
+    local comparison_context="${parent_compare_point} to ${current_compare_point}"
+
+    echo "\n--- Delta for: ${current_compare_point} (compared to ${parent_compare_point}) ---" >> "$delta_log_file"
+    [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing ${WHITE}${current_compare_point} ${YELLOW}to ${WHITE}${parent_compare_point}${NC}"
+
+    _process_diff_pair "$parent_compare_point" "$current_compare_point" "$delta_log_file"
+  done
 }

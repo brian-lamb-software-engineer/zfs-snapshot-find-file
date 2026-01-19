@@ -117,6 +117,7 @@ Header: 4-8 words, ALL CAPS, concise (single line).
 - Keep the message focused and high-level; implementation details belong in the PR body.
 -Do a git diff --cached to get the info from files to build the sumamry for the commit messages
 - Output in a text box so its easily copyable, and so there is no auto converting of hypens to bullets and no space after the header by vs code formatting.
+- no quotes or backticks or $ or chars that will break the commit message and cause it to run a command
 
 Example
 ```

@@ -131,7 +131,6 @@ function process_snapshots_for_dataset() {
       /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
         # shellcheck disable=SC2016
         xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
-        # shellcheck enable=SC2016
     else
       # ADDED: Declared RESULTS as local
       local RESULTS
@@ -143,7 +142,6 @@ function process_snapshots_for_dataset() {
         /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
           # shellcheck disable=SC2016
           xargs -0 -I {} bash -c 'echo "$1"' _ "{}" >> "$all_snapshot_files_found_tmp"
-          # shellcheck enable=SC2016
       fi
     fi
     ##

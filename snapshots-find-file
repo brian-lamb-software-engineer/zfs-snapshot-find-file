@@ -8,11 +8,6 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
-# source libraries from the script's directory ---
-# shellcheck source=lib/common.sh
-# shellcheck source=lib/zfs-search.sh
-# shellcheck source=lib/zfs-compare.sh
-# shellcheck source=lib/zfs-cleanup.sh
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/zfs-search.sh"
 source "$SCRIPT_DIR/lib/zfs-compare.sh"
@@ -37,7 +32,6 @@ done
 if [[ $COMPARE == 1 ]]; then
   # shellcheck disable=SC2154
   compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH_FS" "${DATASETS[@]}"
-  # shellcheck enable=SC2154
   log_snapshot_deltas "$DATASETPATH_FS" "${DATASETS[@]}"
   identify_and_suggest_deletion_candidates "$DATASETPATH_FS" "${DATASETS[@]}"
   echo -e "${BLUE}Comparison process complete. Exiting.${NC}"

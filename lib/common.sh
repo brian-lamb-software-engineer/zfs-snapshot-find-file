@@ -27,8 +27,6 @@ IGNORE_REGEX_PATTERNS=(
 all_snapshot_files_found_tmp=$(mktemp)
 
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-# shellcheck enable=SC2034
-
 DATASETPATH=""
 SNAPREGEX=""
 RECURSIVE=0

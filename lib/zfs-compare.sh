@@ -33,7 +33,6 @@ function compare_snapshot_files_to_live_dataset() {
   #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$1"' _ "{}" > "$live_files_tmp"\
   # shellcheck disable=SC2016
   /bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "$0"' "{}" > "$live_files_tmp"
-  # shellcheck enable=SC2016
 
   [[ $VERBOSE == 1 ]] && echo -e "${BLUE}Live dataset file count: $(wc -l < "$live_files_tmp")${NC}"
 

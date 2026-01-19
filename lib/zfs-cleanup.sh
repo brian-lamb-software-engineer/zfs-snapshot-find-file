@@ -1,6 +1,6 @@
 #!/bin/bash
-# shellcheck shell=bash
 # ZFS snapshot cleanup and deletion candidate functions
+#
 function identify_and_suggest_deletion_candidates() {
   local dataset_path_prefix="$1" # This is the /nas/live/cloud/ path
   shift # Remove the first argument

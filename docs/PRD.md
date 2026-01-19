@@ -77,6 +77,15 @@ Recent runtime fixes applied (not part of Phase 2 refactor):
 - Use a tokenized `FILEARR` when building `find` expressions so multiple `-f` patterns and `-o`/`-name` tokens are passed as separate arguments to `find`. This fixes multi-`-f` and quoting/tokenization issues discovered during testing.
 - Fixed recursive dataset discovery by removing an extra `tail -n +2` that could drop the first dataset returned by `zfs list -rH`.
 
+Compare mode behavior note:
+- When `-c` (compare) is used, the tool now enables recursive dataset discovery implicitly (equivalent to `-r`) and prints a one-line warning. This ensures compare inspects child datasets so it reports snapshot-only files accurately for dataloss checks.
+- Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `IGNORE_REGEX_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
+
+Destroy safety recommendations (Phase 2 - before enabling automated destruction):
+- Add `--dry-run` and `--force` flags and require an explicit `--confirm-destroy` flag (or environment variable) to actually execute any `zfs destroy` calls.
+- Add a final interactive confirmation step and require an opt-in guard such as `SFF_ALLOW_DESTROY=1` for automated runs.
+- Record and publish a pre-destroy report (what would be destroyed) and require human review before allowing the actual destroy operation to proceed.
+
 ---
 Generated: $(date -u)
 

@@ -8,6 +8,8 @@ ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
 FILENAME_ARR=()
 FILEARR=()
+#LOG_DIR=/tmp #default
+LOG_DIR=/tmp
 RED='\033[0;31m'
 YELLOW='\033[33m'
 BLUE='\033[0;34m'
@@ -17,14 +19,18 @@ NC='\033[0m' # No Color
 # Example 2: Ignore temporary directories
 # Example 3: Ignore macOS specific files
 # Example 4: Ignore Windows specific thumbnail files
-IGNORE_REGEX_PATTERNS=(
-  "^.*\.cache/.*$" 
+DEFAULT_IGNORE_REGEX_PATTERNS=(
+  "^.*\.cache/.*$"
   "^.*/tmp/.*$"
   "^.*/\.DS_Store$"
   "^.*/thumbs\.db$"
 )
 
-all_snapshot_files_found_tmp=$(mktemp)
+# By default, ignore these common filesystem noise patterns. Users may override
+# `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
+IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
+
+all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/all_snapshot_files_found.XXXXXX")
 
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 DATASETPATH=""
@@ -153,6 +159,14 @@ function initialize_search_parameters() {
   [[ $VERBOSE == 1 ]] && echo "Snapshot regex: $SNAPREGEX"
   [[ $VERBOSE == 1 ]] && echo "Recursive flag: $RECURSIVE"
 
+  # If compare mode requested, ensure we include child datasets for accurate dataloss detection.
+  # This makes compare mode safe-by-default (it will search child datasets unless -r is explicitly omitted),
+  # and prints a clear warning so the user understands the broader work being performed.
+  if [[ $COMPARE -eq 1 && $RECURSIVE -ne 1 ]]; then
+    echo -e "${YELLOW}Compare mode requires full dataset discovery; enabling recursive discovery (-r) for accurate results.${NC}"
+    RECURSIVE=1
+  fi
+
   # Discover datasets based on recursive flag, by delegating to helper
   # (moved to `lib/datasets.sh` as `discover_datasets()`)
   discover_datasets "$DATASETPATH" "$RECURSIVE"
@@ -259,6 +273,33 @@ function initialize_search_parameters() {
     ds="${ds%/}"
     ds="${ds#/}"
     printf '%s' "$ds"
+  }
+
+  # Map a full snapshot file path to the live dataset equivalent path.
+  # Args:
+  #  $1 - ZFS dataset name (no leading slash), e.g. pool/dataset
+  #  $2 - snapshot root path (the directory that contains .zfs/snapshot/<snap>), e.g. /pool/dataset/.zfs/snapshot/<snap>
+  #  $3 - full file path inside the snapshot, e.g. /pool/dataset/.zfs/snapshot/<snap>/path/to/file
+  # Output: prints the live-equivalent path, e.g. /pool/dataset/path/to/file
+  function map_snapshot_to_live_path() {
+    local dataset_name="$1"
+    local snap_root="$2"
+    local full_path="$3"
+
+    # Ensure dataset_name is normalized (no leading slash)
+    dataset_name="${dataset_name#/}"
+
+    # Filesystem root for the dataset
+    local fs_root="/${dataset_name%/}"
+
+    # Ensure snap_root ends with a slash for prefix removal
+    local snap_prefix="${snap_root%/}/"
+
+    # Compute the path relative to the snapshot root
+    local rel_path="${full_path#${snap_prefix}}"
+
+    # Construct live-equivalent path
+    printf '%s' "${fs_root%/}/${rel_path}"
   }
 
   # File pattern builder

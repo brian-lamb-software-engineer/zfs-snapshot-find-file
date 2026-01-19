@@ -33,7 +33,8 @@ if [[ $COMPARE == 1 ]]; then
   # shellcheck disable=SC2154
   compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH_FS" "${DATASETS[@]}"
   log_snapshot_deltas "$DATASETPATH_FS" "${DATASETS[@]}"
-  identify_and_suggest_deletion_candidates "$DATASETPATH_FS" "${DATASETS[@]}"
+  # Note: Do not automatically suggest snapshot deletions during compare/search.
+  # To run deletion candidate analysis, invoke the cleanup step explicitly.
   echo -e "${BLUE}Comparison process complete. Exiting.${NC}"
   exit 0
 fi

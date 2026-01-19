@@ -12,6 +12,36 @@
 # - Filtering snapshots using regex patterns (-s).
 # - Verbose output for debugging and detailed logging.
 
+function _handle_compare_snapdir() {
+  local snappath="$1"
+  local dataset="$2"
+  local dataset_name="$3"
+  local SNAPNAME="$4"
+  local creation_time_epoch="$5"
+
+  local full_snap_id="${dataset_name}@${SNAPNAME}"
+  /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
+    # shellcheck disable=SC2016
+    xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+}
+
+function _handle_noncompare_snapdir() {
+  local snappath="$1"
+  local dataset="$2"
+  local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
+  local found_tmp
+  found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
+
+  /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
+  if [[ -s "$found_tmp" ]]; then
+    while IFS= read -r -d '' file; do
+      echo -e "${GREEN}${file}${NC}"
+      record_found_file "$file"
+    done < "$found_tmp"
+  fi
+  rm -f "$found_tmp"
+}
+
 function process_snapshots_for_dataset() {
   local dataset="$1"
 
@@ -79,6 +109,8 @@ function process_snapshots_for_dataset() {
   [[ $VERBOSE == 1 ]] && echo "Checking snapshot directory: $snapdirs"
 
   local snapshot_found=0
+  # Track files found count at start for per-dataset reporting
+  local dataset_start_count=${found_files_count:-0}
   for snappath in $snapdirs; do
     # Skip if the snapshot directory does not exist
     if [[ ! -d "$snappath" ]]; then
@@ -121,35 +153,11 @@ function process_snapshots_for_dataset() {
     # It also corrects the 'zfs get' commands target and the 'xargs' arg passing for accurate path construction.
     ##
     if [[ $COMPARE == 1 ]]; then
-      # ADDED: Declared full_snap_id as local
       local full_snap_id="${dataset_name}@${SNAPNAME}"
-
-      # ADDED: Declared creation_time_epoch as local
       local creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
-
-      # Output format: live_equivalent_path|snapshot_name|creation_time_epoch
-      /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
-        # shellcheck disable=SC2016
-        xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+      _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME" "$creation_time_epoch"
     else
-      # Print found files in green and append raw paths to the global temp file
-      local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
-      local found_tmp
-      found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
-
-      /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
-      if [[ -s "$found_tmp" ]]; then
-        # Read null-delimited paths and print each in green
-        while IFS= read -r -d '' file; do
-          echo -e "${GREEN}${file}${NC}"
-          # Also append raw file paths to the global temp file so the caller can detect
-          # that files were found when not running in COMPARE mode.
-          #/bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
-          #  # shellcheck disable=SC2016
-          echo "$file" >> "$all_snapshot_files_found_tmp"
-        done < "$found_tmp"
-      fi
-      rm -f "$found_tmp"
+      _handle_noncompare_snapdir "$snappath" "$dataset"
     fi
     ##
     # NEW FUNCTIONALITY MODIFICATION END
@@ -167,4 +175,11 @@ function process_snapshots_for_dataset() {
   ##
   # CUSTOM CODE END
   ##
+
+  # Print per-dataset summary for non-compare runs
+  if [[ $COMPARE != 1 ]]; then
+    local dataset_end_count=${found_files_count:-0}
+    local dataset_delta=$((dataset_end_count - dataset_start_count))
+    echo "Total files found in dataset: $dataset_delta"
+  fi
 }

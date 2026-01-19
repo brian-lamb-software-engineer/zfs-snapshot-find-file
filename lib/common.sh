@@ -96,6 +96,46 @@ function help(){
   exit 1;
 }
 
+# Counter for recorded found files across the run
+found_files_count=0
+
+# Record a found file to the global snapshot list and increment the counter
+function record_found_file() {
+  local file="$1"
+  echo "$file" >> "$all_snapshot_files_found_tmp"
+  ((found_files_count++))
+}
+
+# Prompt for confirmation. Returns 0 if confirmed, non-zero otherwise.
+function confirm_action() {
+  local prompt="${1:-Are you sure? [y/N]}"
+  read -r -p "$prompt " ans
+  case "$ans" in
+    [Yy]|[Yy][Ee][Ss]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prompt with default option. Usage: prompt_confirm "Question?" "y"  (default is 'n')
+function prompt_confirm() {
+  local prompt="${1:-Are you sure?}"
+  local default="${2:-n}"
+  if [[ "$default" == "y" ]]; then
+    prompt="$prompt [Y/n]"
+  else
+    prompt="$prompt [y/N]"
+  fi
+  local ans
+  read -r -p "$prompt " ans
+  if [[ -z "$ans" ]]; then
+    ans="$default"
+  fi
+  case "$ans" in
+    [Yy]|[Yy][Ee][Ss]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 function parse_arguments() {
   # CRUCIAL FIX: Reset OPTIND to 1 before calling getopts.
   # This ensures getopts always starts parsing from the first argument,

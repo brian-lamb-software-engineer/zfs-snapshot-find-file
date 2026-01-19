@@ -2,7 +2,10 @@
 # Common variables, constants, and utility functions
 
 FILESTR=""
-
+# Deletion / destroy flags (safe defaults)
+SFF_DESTROY_FORCE=0
+DELETE_SNAPSHOTS=0
+DESTROY_SNAPSHOTS=0
 # shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
@@ -30,9 +33,6 @@ DEFAULT_IGNORE_REGEX_PATTERNS=(
 # By default, ignore these common filesystem noise patterns. Users may override
 # `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
 IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
-
-all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/all_snapshot_files_found.XXXXXX")
-
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 DATASETPATH=""
 SNAPREGEX=""
@@ -44,6 +44,8 @@ DSP_CONSTITUENTS_ARR_CNT=0
 TRAILING_WILDCARD_CNT=0
 BASE_DSP_CNT=0
 DATASETS=() # Will store the list of datasets to iterate
+
+all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/all_snapshot_files_found.XXXXXX")
 
 function help(){
   echo
@@ -63,8 +65,17 @@ function help(){
     -s (optional) <snapshot-name-regex-term> (will search all if not specified)
     -r (optional) (recursively search into child datasets)
     -v (optional) (verbose output)
+    --delete-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
+    --destroy-snapshots (optional) orchestrate cleanup and attempt to apply destroys (still requires SFF_ALLOW_DESTROY=1)
+    --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
     -h (this help)
     "
+  echo "
+    Notes for deletion:
+    - By default no destroys are executed. To generate a plan use --delete-snapshots.
+    - To attempt to apply destroys pass --destroy-snapshots and set environment variable SFF_ALLOW_DESTROY=1.
+    - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
+  "
   echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
   echo '
     # search recursively, for all files in a given dataset, and its childs datasets recursively, and print verbose output
@@ -91,6 +102,20 @@ function help(){
   echo '
     #search recursively with verbose, through all datsets snaps, and for all files (short form) (e.g. list all snapshot files)
     snapshots-find-file -d "/pool" -rv'
+  echo '
+    # Deletion examples — plan, interactive apply, and force
+    # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
+    snapshots-find-file -c -d "/nas/live/cloud" --delete-snapshots -s "*" -f "index.html"
+
+    # interactive apply (will prompt before executing the generated plan)
+    snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots -s "*" -f "index.html"
+
+    # force destroy in generated plan (adds -f to zfs destroy when executed)
+    snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots --force -s "*" -f "index.html"
+
+    # advanced: call cleanup function directly for a subset of datasets (debug)
+    bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
+'
   echo
   echo "Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/')."
   exit 1;
@@ -141,6 +166,21 @@ function parse_arguments() {
   # This ensures getopts always starts parsing from the first argument,
   # preventing issues where it might skip arguments if OPTIND was previously modified.
   local OPTIND=1
+  # Support long-form options by pre-scanning and removing them from positional args
+  local new_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --delete-snapshots)
+        DELETE_SNAPSHOTS=1; shift ;;
+      --destroy-snapshots)
+        DESTROY_SNAPSHOTS=1; shift ;;
+      --force)
+        SFF_DESTROY_FORCE=1; shift ;;
+      *) new_args+=("$1"); shift ;;
+    esac
+  done
+  # restore positional args for getopts
+  set -- "${new_args[@]}"
   while getopts ":d:f:o:s:rvhc" ARG; do
     case "$ARG" in
       v) # echo "Running -$ARG flag for verbose output"
@@ -159,6 +199,10 @@ function parse_arguments() {
          OTHERFILE=$OPTARG ;;
       r)
          RECURSIVE=1 ;;
+      D)
+        DELETE_SNAPSHOTS=1 ;;
+      X)
+        DESTROY_SNAPSHOTS=1 ;;
       c)
          COMPARE=1 ;;
       h) help ;;

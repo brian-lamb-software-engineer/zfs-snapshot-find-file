@@ -91,6 +91,21 @@ Destroy safety recommendations (Phase 2 - before enabling automated destruction)
 - Add a final interactive confirmation step and require an opt-in guard such as `SFF_ALLOW_DESTROY=1` for automated runs.
 - Record and publish a pre-destroy report (what would be destroyed) and require human review before allowing the actual destroy operation to proceed.
 
+Phase 2 — Implemented scaffolding (partial)
+-----------------------------------------
+
+Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
+
+- Added flag-driven deletion orchestration: `--delete-snapshots` (plan-only) and `--destroy-snapshots` (attempt apply after prompt). A `--force` option is available to include `-f` on generated `zfs destroy` commands.
+- Implemented generation of an executable destroy plan file (`/tmp/destroy-plan-<timestamp>.sh`) while continuing to display `WOULD delete` and commented `# /sbin/zfs destroy "<snap>"` lines in CLI output for review.
+- Interactive confirmation is required before any plan is executed; no non-interactive `--yes` option was added to prevent accidental runs.
+- Split several long functions and moved shared helpers into `lib/common.sh` (e.g., `record_found_file`, `prompt_confirm`) to improve readability and reuse. Notable refactors:
+  - `process_snapshots_for_dataset()` partially split into compare/non-compare handlers in `lib/zfs-search.sh` and now prints per-dataset totals in non-compare runs.
+  - `identify_and_suggest_deletion_candidates()` was split into helper collectors and evaluator/planner in `lib/zfs-cleanup.sh` (plan generation and gated execution).
+- Reordered comparison output so the neutral-colored comparison summary is printed at the bottom of CLI output; `lib/zfs-compare.sh` now writes the summary to logs and `snapshots-find-file` prints the CSV-derived summary last.
+
+These changes are intentionally conservative: destructive operations remain gated and require explicit flags and interactive confirmation. The next Phase 2 steps are to add test fixtures, further break down any remaining functions >60 lines, and add CI lint/tests before considering unattended execution.
+
 ---
 Generated: $(date -u)
 

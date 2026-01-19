@@ -25,3 +25,5 @@ Performance / IO: compare mode potentially scans many snapshots and the whole li
 Accurate normalization matters: DATASETPATH_FS, dataset_name, and how snapshot paths are converted to “live-equivalent” paths must be correct or you’ll get mismatches.
 Safety: compare should not destroy anything itself, only report — current code follows that (good). Cleanup step only prints suggestions.
 False positives/ignored files: IGNORE_REGEX_PATTERNS can filter noise, but may hide some valid cases if misconfigured.
+
+See cleanup and destroy examples: [docs/CLEANUP.md](docs/CLEANUP.md)

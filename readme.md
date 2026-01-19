@@ -1,29 +1,199 @@
-# Compare mode
+# snapshots-find-file — Snapshot search and cleanup
 
-compare mode (-c) is a dataloss detector — it collects the snapshot file inventory and compares those paths against the current live dataset to report files that exist in snapshots but are missing from live. It's effectively "what would I lose if the live dataset were the source of truth?"
+`snapshots-find-file` (a.k.a. `sff`) searches ZFS snapshots, lists matching files, and can compare snapshot inventories to a live dataset to detect missing files and suggest safe snapshot deletions.
 
-How it works (from your code)
+Entry point: `snapshots-find-file` (root script)
 
-process_snapshots_for_dataset() scans each snapshot and writes normalized snapshot file paths into all_snapshot_files_found_tmp (when not in compare it also prints ls -lh output).
-When -c is set, top-level script calls compare_snapshot_files_to_live_dataset "$all_snapshot_files_found_tmp" "$DATASETPATH_FS" "${DATASETS[@]}".
-compare_snapshot_files_to_live_dataset():
-Builds a list of live files from the provided live_dataset_path.
-Sorts snapshot entries (newest-first) to prefer newest snapshot for duplicates.
-Reports snapshot paths that are not found in the live-file list (respecting IGNORE_REGEX_PATTERNS).
-Writes logs: comparison-<timestamp>.out and comparison-delta-<timestamp>.out.
-log_snapshot_deltas() and identify_and_suggest_deletion_candidates() consume those outputs to produce CSV deltas and suggested zfs destroy commands (non-destructive suggestions).
+Libraries used:
+- `lib/common.sh` — CLI parsing, shared helpers, constants
+- `lib/zfs-search.sh` — snapshot traversal and file discovery
+- `lib/zfs-compare.sh` — compare snapshot file lists to live dataset and produce deltas
+- `lib/zfs-cleanup.sh` — identify deletion candidates and generate destroy plans
 
-Why it was added (most likely reasons)
+Brief summary
 
-Detect accidental deletion or drift: identify files present in historical snapshots but missing from live (true dataloss).
-Triage before cleanup: let you confirm whether a snapshot contains unique data before suggesting destroys.
-Audit and reporting: produce machine-parsable CSV and human-readable logs to review deltas across snapshot pairs.
-Important implications / pitfalls
+Use `-c` (compare) to run dataloss detection: the tool builds a snapshot inventory and compares it to the live dataset to report files present in snapshots but missing on live. This is useful to triage accidental deletions or data drift before any cleanup.
 
-Scope mismatch risk (your real bug): if -c runs non-recursive and the target files reside in child datasets, compare will report false negatives (it will say “not missing” when the missing file is simply in a child dataset you didn’t scan). So compare must scan the same set of datasets you expect to compare.
-Performance / IO: compare mode potentially scans many snapshots and the whole live tree — it’s I/O heavy and slower than non-compare searches.
-Accurate normalization matters: DATASETPATH_FS, dataset_name, and how snapshot paths are converted to “live-equivalent” paths must be correct or you’ll get mismatches.
-Safety: compare should not destroy anything itself, only report — current code follows that (good). Cleanup step only prints suggestions.
-False positives/ignored files: IGNORE_REGEX_PATTERNS can filter noise, but may hide some valid cases if misconfigured.
+Important notes
 
-See cleanup and destroy examples: [docs/CLEANUP.md](docs/CLEANUP.md)
+- Be careful with recursive scope: ensure you scan the same set of datasets you intend to compare (use `-r` or dataset wildcards appropriately).
+- Default behavior is conservative — no destructive operations are executed unless you explicitly request them via `--destroy-snapshots`.
+
+
+## Cleanup and destroy
+
+The tool supports conservative, flag-driven snapshot cleanup workflows. By default nothing is destroyed — the tool generates a destroy plan and prints "WOULD delete" lines so you can review suggested removals.
+
+Usage examples:
+
+- Generate suggestions and a destroy-plan (dry-run):
+
+```bash
+./snapshots-find-file -c -d "/nas/live/cloud" --delete-snapshots -s "*" -f "index.html"
+```
+
+This writes an executable plan at `/tmp/destroy-plan-<timestamp>.sh` and prints suggested `WOULD delete` lines to the CLI for review.
+
+- Interactive apply (prompted):
+
+```bash
+./snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots -s "*" -f "index.html"
+```
+
+The script will prompt `Execute destroy plan now? [y/N]` before executing the generated plan. A log of executed destroys is written to `/tmp/destroy-exec-<timestamp>.log`.
+
+- Force option (adds `-f` to generated `zfs destroy` commands):
+
+```bash
+./snapshots-find-file -c -d "/nas/live/cloud" --destroy-snapshots --force -s "*" -f "index.html"
+```
+
+Notes:
+
+- The tool is intentionally conservative — test with `--delete-snapshots` (plan-only) before attempting to execute any destroys.
+- There is no non-interactive `--yes` option; interactive confirmation is required before plan execution.
+
+
+
+
+
+
+# Code Catalog — functions and TODOs
+
+Function map (file -> function -> start..end (count))
+
+- lib/common.sh (203 lines)
+  - `help()` : L36..L84 (49 lines)
+  - `parse_arguments()` : L85..L130 (46 lines)
+  - `initialize_search_parameters()` : L131..L203 (73 lines)
+
+- lib/zfs-search.sh (122 lines)
+  - `process_snapshots_for_dataset()` : L15..L122 (108 lines)
+
+- lib/zfs-compare.sh (184 lines)
+  - `compare_snapshot_files_to_live_dataset()` : L4..L100 (97 lines)
+  - `log_snapshot_deltas()` : L101..L184 (84 lines)
+
+- lib/zfs-cleanup.sh (136 lines)
+  - `identify_and_suggest_deletion_candidates()` : L4..L136 (133 lines)
+
+Notes and immediate observations
+- `lib/common.sh` is the designated shared utilities file (`common.sh`) and should remain so; it contains CLI parsing and initialization helpers.
+- Multiple functions exceed the 60-line target (candidates for Phase 2 splitting):
+  - `initialize_search_parameters()` (73 lines)
+  - `process_snapshots_for_dataset()` (108 lines)
+  - `compare_snapshot_files_to_live_dataset()` (97 lines)
+  - `log_snapshot_deltas()` (84 lines)
+  - `identify_and_suggest_deletion_candidates()` (133 lines)
+
+TODO / FIXME / NOTES extracted from code comments
+- `lib/common.sh`
+  - L86: "CRUCIAL FIX: Reset OPTIND to 1 before calling getopts."
+  - L199: "CUSTOM CODE BEGIN"
+  - L226: "CUSTOM CODE END (moved inside a function)"
+
+- `lib/zfs-search.sh`
+  - L28: "CUSTOM CODE CONTINUE BEGIN"
+  - L38: "ADDED: Declared DS_CONST_ARR as local and used robust read -a"
+  - L41: "ADDED: Declared DS_CONST_ARR_CNT as local"
+  - L68: "ADDED: Declared snapdirs as local"
+  - L69: "TODO look to if the first forward slash here is needed, because its coming up as double forward slash on $snapdirs value"
+  - L82: "ADDED: Declared SNAPNAME as local"
+  - L110..L132: "NEW FUNCTIONALITY MODIFICATION BEGIN/END" (COMPARE-specific changes; pay attention to xargs/bash quoting)
+  - L145: "CUSTOM CODE END"
+
+- `lib/zfs-compare.sh`
+  - L88: "TODO figure out why the message below says \"already reported\" then clarify that reason or fix it"
+
+- `lib/zfs-cleanup.sh`
+  - No explicit TODO markers found, but function is large and contains PHASE comments and TODO-like notes in comments.
+
+Immediate recommended next outputs (Phase 1 -> deliverable A)
+1. Confirm this catalog (accept or request changes).
+2. Produce a prioritized extraction list for Phase 2: sort candidate functions by length and propose helper names and split points.
+3. Optional: create a `--test-mode` plan and small fixture harness before refactoring.
+
+Generated: $(date -u)
+
+Recent changes (applied during Phase 1)
+- `lib/common.sh`: added `DATASETPATH_FS` (normalized filesystem path with leading "/"), normalized and deduped `DATASETS`, and improved verbose dataset display to show leading slashes.
+- `lib/zfs-search.sh`: compute both `ds_path` (filesystem path) and `dataset_name` (ZFS name); use `ds_path` for snapshot directory scanning and `dataset_name` for ZFS commands; in non-COMPARE mode, append found file paths into the global temp file so the top-level script can detect matches.
+- `snapshots-find-file`: pass `DATASETPATH_FS` into compare/delta/cleanup functions to ensure filesystem operations use absolute paths.
+
+These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+-
+These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+
+Additional runtime fixes applied during Phase 1 testing:
+- `lib/common.sh` / `build_file_pattern()`: switched to a tokenized `FILEARR` so `find` receives `-name` and `-o` tokens as separate arguments; this fixes multi-`-f` and quoting/tokenization bugs.
+- `discover_datasets()`: removed an extra `tail -n +2` from the recursive `zfs list` call which could cause the parent or first dataset to be omitted from discovery.
+
+---
+
+## Code Catalog — functions and TODOs
+
+Function map (file -> function -> start..end (count))
+
+- lib/common.sh (203 lines)
+  - `help()` : L36..L84 (49 lines)
+  - `parse_arguments()` : L85..L130 (46 lines)
+  - `initialize_search_parameters()` : L131..L203 (73 lines)
+
+- lib/zfs-search.sh (122 lines)
+  - `process_snapshots_for_dataset()` : L15..L122 (108 lines)
+
+- lib/zfs-compare.sh (184 lines)
+  - `compare_snapshot_files_to_live_dataset()` : L4..L100 (97 lines)
+  - `log_snapshot_deltas()` : L101..L184 (84 lines)
+
+- lib/zfs-cleanup.sh (136 lines)
+  - `identify_and_suggest_deletion_candidates()` : L4..L136 (133 lines)
+
+Notes and immediate observations
+- `lib/common.sh` is the designated shared utilities file (`common.sh`) and should remain so; it contains CLI parsing and initialization helpers.
+- Multiple functions exceed the 60-line target (candidates for Phase 2 splitting):
+  - `initialize_search_parameters()` (73 lines)
+  - `process_snapshots_for_dataset()` (108 lines)
+  - `compare_snapshot_files_to_live_dataset()` (97 lines)
+  - `log_snapshot_deltas()` (84 lines)
+  - `identify_and_suggest_deletion_candidates()` (133 lines)
+
+TODO / FIXME / NOTES extracted from code comments
+- `lib/common.sh`
+  - L86: "CRUCIAL FIX: Reset OPTIND to 1 before calling getopts."
+  - L199: "CUSTOM CODE BEGIN"
+  - L226: "CUSTOM CODE END (moved inside a function)"
+
+- `lib/zfs-search.sh`
+  - L28: "CUSTOM CODE CONTINUE BEGIN"
+  - L38: "ADDED: Declared DS_CONST_ARR as local and used robust read -a"
+  - L41: "ADDED: Declared DS_CONST_ARR_CNT as local"
+  - L68: "ADDED: Declared snapdirs as local"
+  - L69: "TODO look to if the first forward slash here is needed, because its coming up as double forward slash on $snapdirs value"
+  - L82: "ADDED: Declared SNAPNAME as local"
+  - L110..L132: "NEW FUNCTIONALITY MODIFICATION BEGIN/END" (COMPARE-specific changes; pay attention to xargs/bash quoting)
+  - L145: "CUSTOM CODE END"
+
+- `lib/zfs-compare.sh`
+  - L88: "TODO figure out why the message below says \"already reported\" then clarify that reason or fix it"
+
+- `lib/zfs-cleanup.sh`
+  - No explicit TODO markers found, but function is large and contains PHASE comments and TODO-like notes in comments.
+
+Immediate recommended next outputs (Phase 1 -> deliverable A)
+1. Confirm this catalog (accept or request changes).
+2. Produce a prioritized extraction list for Phase 2: sort candidate functions by length and propose helper names and split points.
+3. Optional: create a `--test-mode` plan and small fixture harness before refactoring.
+
+Generated: $(date -u)
+
+Recent changes (applied during Phase 1)
+- `lib/common.sh`: added `DATASETPATH_FS` (normalized filesystem path with leading "/"), normalized and deduped `DATASETS`, and improved verbose dataset display to show leading slashes.
+- `lib/zfs-search.sh`: compute both `ds_path` (filesystem path) and `dataset_name` (ZFS name); use `ds_path` for snapshot directory scanning and `dataset_name` for ZFS commands; in non-COMPARE mode, append found file paths into the global temp file so the top-level script can detect matches.
+- `snapshots-find-file`: pass `DATASETPATH_FS` into compare/delta/cleanup functions to ensure filesystem operations use absolute paths.
+
+These changes fix duplicate/relative vs absolute dataset handling and ensure the main script correctly reports when snapshots contain matching files.
+
+Additional runtime fixes applied during Phase 1 testing:
+- `lib/common.sh` / `build_file_pattern()`: switched to a tokenized `FILEARR` so `find` receives `-name` and `-o` tokens as separate arguments; this fixes multi-`-f` and quoting/tokenization bugs.
+- `discover_datasets()`: removed an extra `tail -n +2` from the recursive `zfs list` call which could cause the parent or first dataset to be omitted from discovery.

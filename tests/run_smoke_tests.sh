@@ -9,11 +9,18 @@ mkdir -p "$LOG_DIR"
 : > "$LOG_FILE"
 
 echo "Smoke test run: $(date)" >> "$LOG_FILE"
+# Load optional local environment overrides
+ENV_FILE=".env"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
+
+: "${SFF_DATASET:=/nas/live/cloud/tcc}"
 
 CMDS=(
-  "snapshots-find-file -c -d \"/nas/live/cloud/tcc\" --clean-snapshots -s \"*\" -f \"index.html\""
-  "snapshots-find-file -c -d \"/nas/live/cloud/tcc\" --destroy-snapshots -s \"*\" -f \"index.html\""
-  "snapshots-find-file -cv -d \"/nas/live/cloud/tcc\" --clean-snapshots -s \"*\" -f \"index.html\""
+  "snapshots-find-file -c -d \"$SFF_DATASET\" --clean-snapshots -s \"*\" -f \"index.html\""
+  "snapshots-find-file -cv -d \"$SFF_DATASET\" --clean-snapshots -s \"*\" -f \"index.html\""
 )
 
 for cmd in "${CMDS[@]}"; do

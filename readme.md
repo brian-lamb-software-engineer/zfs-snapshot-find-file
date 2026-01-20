@@ -57,6 +57,16 @@ Note: the tests may require access to ZFS datasets on the host. For CI, it's
 recommended to add a fixture or `--test-mode` to avoid depending on live
 ZFS data.
 
+Local configuration
+
+You can create a local `.env` file at the project root to override the
+dataset and pattern used by the tests. Copy `.env.example` to `.env` and edit
+the variables to match your environment. The `.env` file is ignored by git.
+
+  cp .env.example .env
+  # edit .env to set SFF_DATASET, SFF_SNAPSHOT_PATTERN, SFF_FILE_PATTERN
+
+
 ## Files and libraries
 
 - Entry point: `snapshots-find-file`

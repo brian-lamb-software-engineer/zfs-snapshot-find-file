@@ -94,7 +94,7 @@ Compare mode behavior note:
 - Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `IGNORE_REGEX_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
 
 Destroy safety recommendations (Phase 2 - before enabling automated destruction):
-- Keep plan-only and apply separated: `--clean-snapshots` (plan-only) vs `--destroy-snapshots` (attempt apply).
+-- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh` and requires an interactive confirmation.
 - Use a permanent top-level configuration guard for execution: require the master switch `DESTROY_SNAPSHOTS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
 - Preserve an interactive confirmation step before executing any plan. Also generate and persist a human-readable pre-destroy report for review.
 
@@ -103,7 +103,7 @@ Phase 2 — Implemented scaffolding (partial)
 
 Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
 
- - Added flag-driven deletion orchestration: `--clean-snapshots` (plan-only) and `--destroy-snapshots` (attempt apply after prompt). The plan-only flow is controlled by `SFF_DELETE_PLAN` and actual execution is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands.
+ - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `SFF_DELETE_PLAN` and actual execution is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
 - Implemented generation of an executable destroy plan file (`/tmp/destroy-plan-<timestamp>.sh`) while continuing to display `WOULD delete` and commented `# /sbin/zfs destroy "<snap>"` lines in CLI output for review.
 - Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `DESTROY_SNAPSHOTS=1`.
 - Split several long functions and moved shared helpers into `lib/common.sh` (e.g., `record_found_file`, `prompt_confirm`) to improve readability and reuse. Notable refactors:

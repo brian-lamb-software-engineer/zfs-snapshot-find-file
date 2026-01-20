@@ -1,6 +1,9 @@
 # Ignore smoke test logs and other runtime artifacts
 tests/*.log
 
+# Local environment overrides (do not commit)
+.env
+
 # ignore ai summary file
 AI_SUMMARY.md
 

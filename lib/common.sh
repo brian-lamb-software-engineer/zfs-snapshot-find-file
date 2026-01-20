@@ -92,7 +92,6 @@ function help(){
     -r (optional) (recursively search into child datasets)
     -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
     --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
-    --destroy-snapshots (removed): destroy execution is controlled via configuration variable `DESTROY_SNAPSHOTS` in `lib/common.sh`
     --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
     -h (this help)
     "
@@ -100,8 +99,8 @@ function help(){
     Notes for deletion:
     - By default no destroys are executed. To generate a plan use --clean-snapshots.
     - To attempt to apply destroys enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and then
-      re-run with `--clean-snapshots` to generate/apply the plan. CLI-flag `--destroy-snapshots`
-      has been removed to avoid accidental destructive execution.
+      re-run with `--clean-snapshots` to generate/apply the plan. Applying a generated
+      plan requires enabling the master switch and confirming the interactive prompt.
     - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
   "
   echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
@@ -197,7 +196,7 @@ function prompt_confirm() {
   esac
 }
 
-# Print a yellow warning if the user requested `--destroy-snapshots` but the
+# Print a yellow warning if destroy execution was requested but the
 # top-level `DESTROY_SNAPSHOTS_ALLOWED` is disabled. Callers (cleanup) should
 # invoke this just above any destroy-plan messages so the notice appears in
 # proximity to the destroy output.

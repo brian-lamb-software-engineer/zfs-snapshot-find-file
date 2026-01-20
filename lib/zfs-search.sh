@@ -21,7 +21,7 @@ function _handle_compare_snapdir() {
 
   local full_snap_id="${dataset_name}@${SNAPNAME}"
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
-    # shellcheck disable=SC2016
+    # shellcheck disable=SC2016,SC2154
     xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
 }
 
@@ -32,8 +32,9 @@ function _handle_noncompare_snapdir() {
   local found_tmp
   found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
 
-  vlog "zfs-search.sh _handle_noncompare_snapdir called for dataset=${dataset} snappath=${snappath}"
+  vlog "dataset=${dataset} snappath=${snappath}"
 
+  # shellcheck disable=SC2024
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
   if [[ -s "$found_tmp" ]]; then
     local _quiet_notice_printed=0
@@ -119,9 +120,10 @@ function _process_snappath() {
     return 0
   fi
 
-  vlog "zfs-search.sh _process_snappath dataset=${dataset} ds_path=${ds_path} snappath=${snappath}"
+  vlog "dataset=${dataset} ds_path=${ds_path} snappath=${snappath}"
 
-  local SNAPNAME=$(/bin/basename "$snappath")
+  local SNAPNAME
+  SNAPNAME=$(/bin/basename "$snappath")
   [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "Skipping symlink: ${snappath}" && return 0
 
   [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${WHITE}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
@@ -153,7 +155,7 @@ function _process_snappath() {
 
 function process_snapshots_for_dataset() {
   local dataset="$1"
-  vlog "zfs-search.sh process_snapshots_for_dataset START dataset=${dataset}"
+  vlog "START dataset=${dataset}"
   _psfd_init "$dataset"
   if ! _psfd_should_process "$dataset"; then
     return
@@ -191,7 +193,9 @@ function _psfd_iterate_snapdirs() {
 
   for snappath in $snapdirs; do
     # Process each snapshot path via helper (keeps main function small)
-    _process_snappath "$snappath" "$dataset" "$ds_path" "$PSFD_dataset_name" && PSFD_snapshot_found=1 || true
+    if _process_snappath "$snappath" "$dataset" "$ds_path" "$PSFD_dataset_name"; then
+      PSFD_snapshot_found=1
+    fi
   done
   # Disable globbing again
   set -f

@@ -10,7 +10,7 @@ function _collect_unignored_deleted_snapshots() {
   # If caller failed to provide an acc_deleted_file path, create a safe temp file.
   if [[ -z "$acc_deleted_file" ]]; then
     acc_deleted_file=$(mktemp "${TMPDIR:-/tmp}/${SFF_TMP_PREFIX}acc_deleted.XXXXXX")
-    vlog "zfs-cleanup.sh _collect_unignored_deleted_snapshots: created fallback acc_deleted_file=$acc_deleted_file"
+    vlog "created_acc_deleted_file=${acc_deleted_file}"
   fi
 
   local accidentally_deleted_count=0
@@ -18,7 +18,7 @@ function _collect_unignored_deleted_snapshots() {
   echo "Snapshot,File_Path,Live_Dataset_Path" > "$acc_deleted_file"
 
   while IFS= read -r dataset; do
-    vlog "zfs-cleanup.sh _collect_unignored_deleted_snapshots processing dataset: ${dataset}"
+    vlog "processing_dataset=${dataset}"
     local -a snapshots=()
     mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
     [[ ${#snapshots[@]} -eq 0 ]] && continue
@@ -40,7 +40,7 @@ function _collect_unignored_deleted_snapshots() {
             printf "%s,\"%s\",%s\n" "${current_snap}" "${path//\"/\"\"}" "${live_dataset_full_name}" >> "$acc_deleted_file"
             echo "$current_snap" >> "$snap_holding_file"
             ((accidentally_deleted_count++))
-            vlog "zfs-cleanup.sh _collect_unignored_deleted_snapshots found deleted file: ${path} in snapshot ${current_snap}"
+            vlog "deleted_file=${path} snapshot=${current_snap}"
           fi
         fi
       done
@@ -58,7 +58,7 @@ function identify_and_suggest_deletion_candidates() {
   shift
   local -a datasets_array=("$@")
 
-  vlog "zfs-cleanup.sh identify_and_suggest_deletion_candidates START; datasets_count=${#datasets_array[@]} prefix=${dataset_path_prefix}"
+  vlog "START datasets_count=${#datasets_array[@]} prefix=${dataset_path_prefix}"
 
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
@@ -76,7 +76,7 @@ function identify_and_suggest_deletion_candidates() {
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
 
   # prepare temp files and datasets list (capture lines robustly)
-  [[ ${VVERBOSE:-0} -eq 1 ]] && echo "vlog: preparing cleanup temp files; tmp_base=$tmp_base TIMESTAMP=$TIMESTAMP datasets_count=${#datasets_array[@]}"
+  vlog "preparing_cleanup_temp_files tmp_base=$tmp_base TIMESTAMP=$TIMESTAMP datasets_count=${#datasets_array[@]}"
   mapfile -t __pc_out < <(_prepare_cleanup_temp_files "$tmp_base" "$TIMESTAMP" "${datasets_array[@]}")
   datasets_file="${__pc_out[0]:-}"
   acc_deleted_file="${__pc_out[1]:-}"
@@ -186,16 +186,17 @@ function _evaluate_deletion_candidates_and_plan() {
     while IFS= read -r s; do sacred["$s"]=1; done < "$snap_holding_file"
   fi
 
-  vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan START; datasets_file=$datasets_file"
+  vlog "datasets_file=${datasets_file} START"
   while IFS= read -r dataset; do
-    vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan processing dataset: ${dataset}"
+    vlog "processing_dataset=${dataset}"
     local -a snapshots=()
     mapfile -t snapshots < <(/sbin/zfs list -t snapshot -o name -s creation "$dataset" 2>/dev/null | tail -n +2)
     [[ ${#snapshots[@]} -eq 0 ]] && continue
 
     for i in "${!snapshots[@]}"; do
       local current_snap="${snapshots[$i]}"
-      vlog "zfs-cleanup.sh _evaluate_deletion_candidates_and_plan evaluating snapshot: ${current_snap}"
+      vlog "evaluating_snapshot=${current_snap}"
+      # shellcheck disable=SC2034
       local is_deletion_candidate="true"
 
       if [[ -n "${sacred[$current_snap]}" ]]; then

@@ -13,6 +13,7 @@ SFF_DELETE_PLAN=1
 # enable it via runtime flags — edit this file to set `DESTROY_SNAPSHOTS=1`.
 DESTROY_SNAPSHOTS=0
 # Deletion / destroy flags (safe defaults)
+# shellcheck disable=SC2034
 SFF_DESTROY_FORCE=0
 # CLI-request tracking var for destroy (declared at top so it's visible/configurable)
 # Preserve any environment-provided request flag so callers can set it with
@@ -38,10 +39,13 @@ COL="\033["
 RED="${COL}0;31m"
 YELLOW="${COL}33m"
 BLUE="${COL}0;34m"
+# shellcheck disable=SC2034
 CYAN="${COL}0;36m"
 GREY="${COL}1;30m"
 WHITE="${COL}1;37m"
+# shellcheck disable=SC2034
 PURPLE="${COL}0;35m"
+# shellcheck disable=SC2034
 GREEN="${COL}0;32m"
 NC="${COL}0m" # No Color
 # Prefix for temporary files created by this tool
@@ -59,7 +63,9 @@ DEFAULT_IGNORE_REGEX_PATTERNS=(
 
 # By default, ignore these common filesystem noise patterns. Users may override
 # `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
+# shellcheck disable=SC2034
 IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
+# shellcheck disable=SC2034
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 DATASETPATH=""
 SNAPREGEX=""
@@ -68,6 +74,7 @@ COMPARE=0
 VERBOSE=0
 VVERBOSE=0
 QUIET=0
+# shellcheck disable=SC2034
 OTHERFILE="" # Although not currently used in core logic, keep for completeness
 DSP_CONSTITUENTS_ARR_CNT=0
 TRAILING_WILDCARD_CNT=0
@@ -167,7 +174,17 @@ function vlog() {
   if [[ ${VVERBOSE:-0} -eq 1 ]]; then
     # Send verbose tracing to stderr so command-substitutions that capture
     # function output are not polluted by debug text.
-    echo -e "${BLUE}$@${NC}" >&2
+    # Auto-prefix messages with calling script and function so callers do not
+    # need to redundantly include filenames or function names everywhere.
+    local caller_func="${FUNCNAME[1]:-MAIN}"
+    local caller_file
+    caller_file=$(basename "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")
+    local msg="$*"
+    if [[ -z "$msg" ]]; then
+      echo -e "${BLUE}${caller_file}::${caller_func}${NC}" >&2
+    else
+      echo -e "${BLUE}${caller_file}::${caller_func}: ${NC}${msg}" >&2
+    fi
   fi
 }
 
@@ -207,7 +224,7 @@ function prompt_confirm() {
 # proximity to the destroy output.
 function print_destroy_disabled_notice() {
   if [[ "${DESTROY_DISABLED_NOTICE:-0}" -eq 1 ]]; then
-    echo -e "${YELLOW}Note: Destroy execution requested but `DESTROY_SNAPSHOTS` is disabled in configuration.${NC}"
+    echo -e "${YELLOW}Note: Destroy execution requested but 'DESTROY_SNAPSHOTS' is disabled in configuration.${NC}"
   fi
 }
 
@@ -543,6 +560,7 @@ function _compute_trailing_wildcard_counts() {
     # get id of the last dir before the trailing wildcards (-1 is because it stops
     #   on the dir after the last specified folder, subtract that also)
     TRAILING_WILDCARD_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - idx - 1 ))
+    # shellcheck disable=SC2034
     BASE_DSP_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - TRAILING_WILDCARD_CNT ))
     # stop on last specified folder (first since we're reverse sorted array)
     [[ $VAL != "*" ]] && break

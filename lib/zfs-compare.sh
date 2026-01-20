@@ -50,6 +50,10 @@ function _csfld_process_sorted() {
 
   vlog "zfs-compare.sh _csfld_process_sorted sorted=${sorted_snapshot_files_tmp} live=${live_files_tmp} log=${log_file} ignored=${ignored_log_file}"
 
+  if [[ ${QUIET:-0} -eq 1 ]]; then
+    echo -e "${YELLOW}Quiet mode enabled: per-file missing output suppressed; showing counts only.${NC}" >&2
+  fi
+
   local total_snapshot_entries=0
   local ignored_files_count=0
   local found_in_live_count=0
@@ -112,8 +116,10 @@ function _csfld_check_path() {
   else
     # Append the detailed missing-entry line to the comparison log only.
     echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" >> "$log_file"
-    # If verbose, also emit a concise notice to stderr for interactive runs.
-    [[ $VERBOSE == 1 ]] && echo -e "${GREEN}MISSING: $live_equivalent_path (snapshot: $snap_name)${NC}" >&2
+    # If verbose and not in quiet mode, also emit a concise notice to stderr for interactive runs.
+    if [[ ${QUIET:-0} -ne 1 && ${VERBOSE:-0} -eq 1 ]]; then
+      echo -e "${GREEN}MISSING: $live_equivalent_path (snapshot: $snap_name)${NC}" >&2
+    fi
     echo "$live_equivalent_path" >> "$seen_paths_tmp"
     printf '%s' "MISSING"
   fi
@@ -257,6 +263,37 @@ function _csfld_write_summary() {
   local found_in_live_count="$6"
   local missing_files_count="$7"
   local skipped_reported_files_count="$8"
+
+  # Write a CSV summary file (defensive: strip ANSI sequences)
+  local summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
+  printf 'metric,value\n' > "$summary_csv"
+  printf 'total_snapshot_entries,%s\n' "$total_snapshot_entries" >> "$summary_csv"
+  printf 'ignored_entries,%s\n' "$ignored_files_count" >> "$summary_csv"
+  printf 'found_in_live,%s\n' "$found_in_live_count" >> "$summary_csv"
+  printf 'missing,%s\n' "$missing_files_count" >> "$summary_csv"
+  printf 'skipped_duplicates,%s\n' "$skipped_reported_files_count" >> "$summary_csv"
+
+  # Background compress older logs from previous runs to conserve disk.
+  # Runs in subshell so it does not block the main process. Excludes files
+  # that contain the current $TIMESTAMP so we don't compress files we just created.
+  (
+    sleep 1
+    cur_ts="$TIMESTAMP"
+    base="$tmp_base"
+    patterns=("$base/comparison-*.out" "$base/comparison-delta-*.out" "$base/comparison-summary-*.csv" "$base/sff_*")
+    for pat in "${patterns[@]}"; do
+      for f in $pat; do
+        [[ -e "$f" ]] || continue
+        case "$f" in
+          *"$cur_ts"*) continue ;;
+        esac
+        # skip already compressed files
+        [[ "$f" == *.gz ]] && continue
+        # perform best-effort compression
+        gzip -9 "$f" >/dev/null 2>&1 || true
+      done
+    done
+  ) &
 
   echo "" >> "$ignored_log_file"
   echo "Ignored files cataloging finished." >> "$ignored_log_file"

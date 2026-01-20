@@ -15,7 +15,9 @@ DESTROY_SNAPSHOTS=0
 # Deletion / destroy flags (safe defaults)
 SFF_DESTROY_FORCE=0
 # CLI-request tracking var for destroy (declared at top so it's visible/configurable)
-REQUEST_DESTROY_SNAPSHOTS=0
+# Preserve any environment-provided request flag so callers can set it with
+# `REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file ...` or `export REQUEST_DESTROY_SNAPSHOTS=1`.
+REQUEST_DESTROY_SNAPSHOTS=${REQUEST_DESTROY_SNAPSHOTS:-0}
 # When a destroy execution was requested but the top-level master flag is disabled,
 # set this so callers can emit a yellow notice near destroy-plan/apply output.
 DESTROY_DISABLED_NOTICE=0
@@ -65,6 +67,7 @@ RECURSIVE=0
 COMPARE=0
 VERBOSE=0
 VVERBOSE=0
+QUIET=0
 OTHERFILE="" # Although not currently used in core logic, keep for completeness
 DSP_CONSTITUENTS_ARR_CNT=0
 TRAILING_WILDCARD_CNT=0
@@ -219,6 +222,8 @@ function parse_arguments() {
     case "$1" in
       -vv)
         VVERBOSE=1; shift ;;
+      -q|--quiet)
+        QUIET=1; shift ;;
       --clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
@@ -238,6 +243,8 @@ function parse_arguments() {
   set -- "${new_args[@]}"
   while getopts ":d:f:o:s:rvhcV" ARG; do
     case "$ARG" in
+      q)
+        QUIET=1 ;;
       v) # echo "Running -$ARG flag for verbose output"
         VERBOSE=1 ;;
       V)

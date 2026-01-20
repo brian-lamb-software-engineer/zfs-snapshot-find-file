@@ -126,6 +126,43 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 
 For programmatic use, prefer the `--help` output as the authoritative reference for flags and semantics.
 
+## Environment forms & quiet mode
+
+You can request interactive apply prompts via an environment variable. Two safe ways to do this:
+
+- Inline for a single invocation (POSIX shell):
+
+```bash
+REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+```
+
+- Export for the session (POSIX shell):
+
+```bash
+export REQUEST_DESTROY_SNAPSHOTS=1
+./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+```
+
+- PowerShell (when invoking the script under WSL/`bash`):
+
+```powershell
+$env:REQUEST_DESTROY_SNAPSHOTS='1'
+bash ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+```
+
+Quiet mode: use `-q` or `--quiet` to suppress per-file console output while still producing logs and the numeric summary. When quiet mode is active the tool prints a single yellow notice in the place where per-file lines would normally appear:
+
+```bash
+./snapshots-find-file -q -c -d /path/to/dataset -s "*" -f "*"
+# -> prints a single yellow line: "[quiet] Per-file output suppressed; counts only"
+```
+
+Tips to avoid large logs filling disk:
+- Use `-q` to avoid console spam.
+- Set `LOG_DIR` to a filesystem with ample space before running (export `LOG_DIR=/mnt/big-disk`).
+- Add large backup directories to `IGNORE_REGEX_PATTERNS` in `lib/common.sh` to exclude them from scans.
+- Rotate or compress old `/tmp/sff_*` logs (e.g., `gzip /tmp/sff_*.out`).
+
 ## Safe deletion checklist (TEST-ONLY workflow)
 
 Follow this workflow to VERIFY the interactive prompt and review a generated destroy plan without executing any `zfs destroy` commands. Do NOT edit `lib/common.sh` to enable execution until you have carefully reviewed the plan.

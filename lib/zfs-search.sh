@@ -36,8 +36,16 @@ function _handle_noncompare_snapdir() {
 
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
   if [[ -s "$found_tmp" ]]; then
+    local _quiet_notice_printed=0
     while IFS= read -r -d '' file; do
-      echo -e "${GREEN}${file}${NC}"
+      if [[ ${QUIET:-0} -ne 1 ]]; then
+        echo -e "${GREEN}${file}${NC}"
+      else
+        if [[ $_quiet_notice_printed -eq 0 ]]; then
+          echo -e "${YELLOW}[quiet] Per-file output suppressed; counts only${NC}"
+          _quiet_notice_printed=1
+        fi
+      fi
       record_found_file "$file"
     done < "$found_tmp"
   fi

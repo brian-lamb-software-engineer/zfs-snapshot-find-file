@@ -74,76 +74,78 @@ DATASETS=() # Will store the list of datasets to iterate
 all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.XXXXXX")
 
 function help(){
-  echo
-  echo "A ZFS snapshot search tool.
-    - Uses a constructed 'find' command to search in specified snapshot for specified file, recursively by default.
-    - Has the ability to search through multiple or all "snapshots" in a given dataset by using wildcard.
-    - Has the ability to search for "files" (in snapshots) by wildcard, and maybe other regex calls
-    - Has the ability to search for multiple files in the same run by specifying multiple (space separated) files (it's faster than running multiple times).
-    - Has the ability to search in child datasets snapshots (all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc..
-    "
-  echo "USAGE:
-    snapshots-find-file
-    -d (required) <dataset-path to search through> 
-    -c (optional) (compare snapshot files to live dataset files to find missing ones) (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
-    -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed) 
-    -o (optional) <other-file-your-searching--for>
-    -s (optional) <snapshot-name-regex-term> (will search all if not specified)
-    -r (optional) (recursively search into child datasets)
-    -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
-    --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
-    --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
-    -h (this help)
-    "
-  echo "
-    Notes for deletion:
-    - By default no destroys are executed. To generate a plan use --clean-snapshots.
-    - To attempt to apply destroys enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and then
-      re-run with `--clean-snapshots` to generate/apply the plan. Applying a generated
-      plan requires enabling the master switch and confirming the interactive prompt.
-    - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
-  "
-  echo "    -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that arent trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used"
-  echo '
-    # search recursively, for all files in a given dataset, and its childs datasets recursively, and print verbose output
-    snapshots-find-file -d "/pool/data/set" -rv'
-  echo '
-    #search for specified file in all of this dataset(only) snaps (wont iterate into child dataset snaps)
-    snapshots-find-file -d "/pool/data/set"  -s "*" -f "*1234*jpg"
-    snapshots-find-file -d "/pool/data/set/" -s "*" -f "*1234*jpg"'
-  echo '
-    # same as before except search only snaps which reside inside all child datasets(only 1 level deep) of mentioned dataset only
-    snapshots-find-file -d "/pool/data/set/*" -s "*" -f "*1234*"'
-  echo '
-    #same as before, except specifying specifc regex for snap name
-    snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*"'
-  echo '
-    # same as before except adding a 2nd and 3rd file to search for
-    snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*.jpg *otherfile*.jpg yet-another-file.img"'
-  echo '
-    #search through specific snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset
-    snapshots-find-file -d "/pool/*/set/*/*" -s "*my-snap*" -f "*1234*.jpg"'
-  echo '
-    #search through all snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset (will not pick up a 3rd level)
-    snapshots-find-file -d "/pool/data/set/*/*" -s "*" -f "*1234*.jpg"'
-  echo '
-    #search recursively with verbose, through all datsets snaps, and for all files (short form) (e.g. list all snapshot files)
-    snapshots-find-file -d "/pool" -rv'
-  echo '
-    # Deletion examples — plan and force (apply requires enabling DESTROY_SNAPSHOTS in config)
-    # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
-    snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
+  cat <<'HELP'
+A ZFS snapshot search tool.
+  - Uses a constructed 'find' command to search in specified snapshot for specified file, recursively by default.
+  - Has the ability to search through multiple or all "snapshots" in a given dataset by using wildcard.
+  - Has the ability to search for "files" (in snapshots) by wildcard, and maybe other regex calls
+  - Has the ability to search for multiple files in the same run by specifying multiple (space separated) files (it's faster than running multiple times).
+  - Has the ability to search in child datasets snapshots (all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc..
 
-    # To apply a generated plan interactively, enable DESTROY_SNAPSHOTS=1 in lib/common.sh,
-    # then re-run with --clean-snapshots to generate and (after confirmation) execute the plan.
-    # force destroy in generated plan (adds -f to zfs destroy when executed)
-    snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
+USAGE:
+  snapshots-find-file
+  -d (required) <dataset-path to search through>
+  -c (optional) (compare snapshot files to live dataset files to find missing ones)
+     (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
+  -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
+  -o (optional) <other-file-your-searching--for>
+  -s (optional) <snapshot-name-regex-term> (will search all if not specified)
+  -r (optional) (recursively search into child datasets)
+  -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
+  --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
+  --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
+  -h (this help)
 
-    # advanced: call cleanup function directly for a subset of datasets (debug)
-    bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
-'
-  echo
-  echo "Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/')."
+Notes for deletion:
+  - By default no destroys are executed. To generate a plan use --clean-snapshots.
+  - To attempt to apply destroys enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and then
+    re-run with `--clean-snapshots` to generate/apply the plan. Applying a generated
+    plan requires enabling the master switch and confirming the interactive prompt.
+  - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
+
+  -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that aren't trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used
+
+Examples:
+
+  # search recursively, for all files in a given dataset, and its childs datasets recursively, and print verbose output
+  snapshots-find-file -d "/pool/data/set" -rv
+
+  # search for specified file in all of this dataset(only) snaps (won't iterate into child dataset snaps)
+  snapshots-find-file -d "/pool/data/set" -s "*" -f "*1234*jpg"
+  snapshots-find-file -d "/pool/data/set/" -s "*" -f "*1234*jpg"
+
+  # same as before except search only snaps which reside inside all child datasets (only 1 level deep) of mentioned dataset only
+  snapshots-find-file -d "/pool/data/set/*" -s "*" -f "*1234*"
+
+  # same as before, except specifying specific regex for snap name
+  snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*"
+
+  # same as before except adding a 2nd and 3rd file to search for
+  snapshots-find-file -d "/pool/data/set/*" -s "*my-snap*" -f "*1234*.jpg *otherfile*.jpg yet-another-file.img"
+
+  # search through specific snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset
+  snapshots-find-file -d "/pool/*/set/*/*" -s "*my-snap*" -f "*1234*.jpg"
+
+  # search through all snaps that reside in child datasets which reside 2 levels and beyond, in specified dataset (will not pick up a 3rd level)
+  snapshots-find-file -d "/pool/data/set/*/*" -s "*" -f "*1234*.jpg"
+
+  # search recursively with verbose, through all datasets snaps, and for all files (short form) (e.g. list all snapshot files)
+  snapshots-find-file -d "/pool" -rv
+
+  # Deletion examples — plan and force (apply requires enabling DESTROY_SNAPSHOTS in config)
+  # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
+  snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
+
+  # To apply a generated plan interactively, enable DESTROY_SNAPSHOTS=1 in lib/common.sh,
+  # then re-run with --clean-snapshots to generate and (after confirmation) execute the plan.
+  # force destroy in generated plan (adds -f to zfs destroy when executed)
+  snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
+
+  # advanced: call cleanup function directly for a subset of datasets (debug)
+  bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
+
+Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/').
+HELP
   exit 1;
 }
 

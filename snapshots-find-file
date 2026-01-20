@@ -54,7 +54,7 @@ if [[ $COMPARE == 1 ]]; then
   if [[ -f "$summary_csv" ]]; then
     echo ""
     echo "--- Comparison Summary ---"
-    awk -F, 'NR>1 { if($1=="total_snapshot_entries") print "Total snapshot entries processed: "$2; else if($1=="ignored_entries") print "Total ignored entries: "$2; else if($1=="found_in_live") print "Total found in live dataset: "$2; else if($1=="missing") print "Total missing (snapshot-only): "$2; else if($1=="skipped_duplicates") print "Total skipped (duplicates): "$2 }' "$summary_csv"
+    print_comparison_summary "$summary_csv"
     echo "Wrote summary to: $summary_csv"
   fi
 

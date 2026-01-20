@@ -97,7 +97,9 @@ function _csfld_check_path() {
         echo "$live_equivalent_path (ignored by pattern: '$pattern')" >> "$ignored_log_file"
         echo "$live_equivalent_path" >> "$seen_ignored_paths_tmp"
       fi
-      [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}"
+      # Send verbose ignore notices to stderr so stdout remains clean for
+      # the numeric counters returned by the prepare-and-run helper.
+      [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}" >&2
       printf '%s' "IGNORED"
       return 0
     fi
@@ -108,7 +110,10 @@ function _csfld_check_path() {
     echo "$live_equivalent_path" >> "$seen_paths_tmp"
     printf '%s' "FOUND"
   else
-    echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" | tee -a "$log_file"
+    # Append the detailed missing-entry line to the comparison log only.
+    echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" >> "$log_file"
+    # If verbose, also emit a concise notice to stderr for interactive runs.
+    [[ $VERBOSE == 1 ]] && echo -e "${GREEN}MISSING: $live_equivalent_path (snapshot: $snap_name)${NC}" >&2
     echo "$live_equivalent_path" >> "$seen_paths_tmp"
     printf '%s' "MISSING"
   fi
@@ -188,7 +193,8 @@ function compare_snapshot_files_to_live_dataset() {
   local log_file="$tmp_base/comparison-$TIMESTAMP.out"
   local ignored_log_file="$tmp_base/compare-ignore-$TIMESTAMP.out"
 
-  echo -e "${CYAN}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}"
+  # Informational output should go to stderr so stdout remains for data.
+  echo -e "${CYAN}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}" >&2
   echo "Comparison initiated on $(date)" > "$log_file"
   echo "Live dataset path: $live_dataset_path" >> "$log_file"
 
@@ -207,7 +213,9 @@ function _csfld_prepare_and_run() {
   local log_file="$4"
   local ignored_log_file="$5"
 
-  [[ $VERBOSE == 1 ]] && echo -e "${CYAN}Gathering live dataset files from: ${WHITE}$live_dataset_path${NC}"
+  # Always send gathering/info messages to stderr so callers capturing stdout
+  # only receive the data payload (temp file paths and final counters).
+  [[ $VERBOSE == 1 ]] && echo -e "${CYAN}Gathering live dataset files from: ${WHITE}$live_dataset_path${NC}" >&2
   local live_files_tmp
   live_files_tmp=$(_gather_live_files "$live_dataset_path" "$tmp_base")
 
@@ -218,7 +226,9 @@ function _csfld_prepare_and_run() {
     else
       live_count=0
     fi
-    echo -e "${CYAN}Live dataset file count: ${live_count}${NC}"
+    # Send this informational/debug message to stderr so the function's
+    # stdout remains reserved for the final counters returned to callers.
+    echo -e "${CYAN}Live dataset file count: ${live_count}${NC}" >&2
   fi
 
   local sorted_snapshot_files_tmp
@@ -251,7 +261,8 @@ function _csfld_write_summary() {
   echo "" >> "$ignored_log_file"
   echo "Ignored files cataloging finished." >> "$ignored_log_file"
 
-  echo -e "${CYAN}Writing comparison summary to logs...${NC}"
+  # Summary-writing notice is informational; route to stderr.
+  echo -e "${CYAN}Writing comparison summary to logs...${NC}" >&2
   {
     echo "--- Comparison Summary ---"
     echo "Total snapshot entries processed: $total_snapshot_entries"
@@ -266,6 +277,11 @@ function _csfld_write_summary() {
   echo "Ignored entries count: $ignored_files_count" >> "$ignored_log_file"
 
   local summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
+  # Write to a temporary CSV then strip any stray ANSI escapes before
+  # producing the final CSV. This prevents colored or human-readable
+  # debug text from being captured as CSV values.
+  local tmp_csv
+  tmp_csv=$(mktemp "${tmp_base}/comparison-summary-tmp.XXXXXX")
   {
     echo "metric,value"
     echo "total_snapshot_entries,$total_snapshot_entries"
@@ -273,7 +289,20 @@ function _csfld_write_summary() {
     echo "found_in_live,$found_in_live_count"
     echo "missing,$missing_files_count"
     echo "skipped_duplicates,${skipped_reported_files_count:-0}"
-  } > "$summary_csv"
+  } > "$tmp_csv"
+
+  # Remove ANSI escape sequences (e.g. \x1B[0;36m) robustly using printf
+  # to construct the escape character for sed. Fall back to copying if
+  # sed fails for any reason.
+  local ESC
+  ESC=$(printf '\033')
+  if sed -r "s/${ESC}\[[0-9;]*[mK]//g" "$tmp_csv" > "$summary_csv" 2>/dev/null; then
+    rm -f "$tmp_csv" || true
+  else
+    # If sed with escaped ESC sequence isn't supported, copy file as-is.
+    cp "$tmp_csv" "$summary_csv" || true
+    rm -f "$tmp_csv" || true
+  fi
 
   echo "Wrote summary to: $summary_csv" >> "$log_file"
 }

@@ -161,7 +161,9 @@ function record_found_file() {
 # Verbose tracing helper: prints when VVERBOSE is enabled
 function vlog() {
   if [[ ${VVERBOSE:-0} -eq 1 ]]; then
-    echo -e "${BLUE}$@${NC}"
+    # Send verbose tracing to stderr so command-substitutions that capture
+    # function output are not polluted by debug text.
+    echo -e "${BLUE}$@${NC}" >&2
   fi
 }
 
@@ -540,4 +542,37 @@ function _compute_trailing_wildcard_counts() {
   set +f
   # CUSTOM CODE END (moved inside a function)
   ##
+}
+
+## Print a validated, human-readable comparison summary from a CSV
+# Args: summary_csv
+function print_comparison_summary() {
+  local summary_csv="$1"
+  [[ -z "$summary_csv" || ! -f "$summary_csv" ]] && return 0
+  local esc
+  esc=$(printf '\033')
+  # Use awk to strip ANSI sequences from the value column, validate numeric
+  # values and print either the number or an INVALID marker to avoid silent
+  # corruption when CSV values are contaminated.
+  awk -F, -v esc="$esc" '
+    NR>1 {
+      key=$1; val=$2;
+      gsub(esc "\\[[0-9;]*[mK]", "", val);
+      if (key=="total_snapshot_entries") {
+        if (val ~ /^[0-9]+$/) print "Total snapshot entries processed: " val;
+        else print "Total snapshot entries processed: INVALID(" val ")";
+      } else if (key=="ignored_entries") {
+        if (val ~ /^[0-9]+$/) print "Total ignored entries: " val;
+        else print "Total ignored entries: INVALID(" val ")";
+      } else if (key=="found_in_live") {
+        if (val ~ /^[0-9]+$/) print "Total found in live dataset: " val;
+        else print "Total found in live dataset: INVALID(" val ")";
+      } else if (key=="missing") {
+        if (val ~ /^[0-9]+$/) print "Total missing (snapshot-only): " val;
+        else print "Total missing (snapshot-only): INVALID(" val ")";
+      } else if (key=="skipped_duplicates") {
+        if (val ~ /^[0-9]+$/) print "Total skipped (duplicates): " val;
+        else print "Total skipped (duplicates): INVALID(" val ")";
+      }
+    }' "$summary_csv"
 }

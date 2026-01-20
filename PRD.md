@@ -3,9 +3,12 @@
 Purpose
 - Reduce wasted space from ZFS snapshots by identifying redundant snapshots and suggesting safe deletions.
 - Detect potentially accidentally deleted files on live datasets by comparing live dataset contents to snapshot contents.
+
+Agent: Developent workflow important notes:
 - If you see functions that are >60 lines, break them out.  
 - When breaking out functions, if you see pieces in that function that are being called from multiple places, break that piece out to its own function, and place it on common.sh, then call it, instead of its code from those multiple places. 
 - avoid usage of ENV Variables, we dont need to code in functionality for that. 
+- note, if you need output, you can give me the command and pipe that to a log, e.g. > out.log, where youo can then view that log yourself, as your inside the code base already
 
 Scope (Phase 1)
 - Catalog and inspect the current codebase split across `snapshots-find-file` ("sff") and `lib/*.sh`.
@@ -23,6 +26,9 @@ Goals (Phase 1 — Cataloging)
 Constraints & Non-goals
 - This phase is an inspection + cataloging step; no snapshot deletions will be executed and no behavior will be changed.
 - Platform: primary runtime is Linux with `zfs`, `find`, `xargs`, `sudo` available.
+
+Runtime output constraint
+- When a function's output is consumed by a command-substitution (e.g. `read < <(...)`), that function MUST emit only the data payload on stdout. All informational, debug, or colored human-readable text must go to stderr or be written to a log file. This avoids contaminating machine-parsable outputs (CSV, counters) used by callers. Follow this rule when adding future debug prints or helpers.
 
 Current repository state (inspection summary)
 - Entry script: `snapshots-find-file` ("sff") — orchestration only; it sources these libraries and calls their functions:
@@ -146,3 +152,9 @@ ADDED NEW FUNCTIONS TO ZFS-SEARCH
 - fixed xargs quoting for compare mode
 - updated temporary file handling
 ```
+
+Phase 2 Progress Update (2026-01-19)
+- **Status**: In-progress, core refactors applied. A repo-wide function-length scan shows no functions exceeding 60 lines.
+- **Completed in Phase 2:** Implemented `VVERBOSE` + `vlog()` tracing; added color constants and `SFF_TMP_PREFIX`; implemented conservative plan-first deletion scaffold gated by `DESTROY_SNAPSHOTS`; split several large functions (examples: `log_snapshot_deltas` -> `_lsd_process_dataset`; `parse_arguments` split into `_pa_*` helpers); restored many removed author comments; hardened temp-file handling.
+- **Left to do:** Finish restoring any remaining removed author comments exactly above the code they document; add fixture-driven `--test-mode` and CI (`shellcheck`) in Phase 2 before enabling any unattended destruction.
+- **Verification performed:** Ran function-length scan across `lib/*.sh` and `snapshots-find-file` — no functions >60 lines were found after recent splits. The `help()` function in `lib/common.sh` remains intentionally unchanged per project instruction.

@@ -38,9 +38,11 @@ permanent guard variable `DESTROY_SNAPSHOTS` must be manually enabled).
 
 - The tool generates a destroy plan (`sff_destroy-plan-<timestamp>.sh`) and
   prints suggested removals as "WOULD delete" lines by default.
-- To execute a destroy plan you must:
+ - To execute a destroy plan you must:
   - enable the `DESTROY_SNAPSHOTS` switch in `lib/common.sh` and
   - run the generated plan script interactively after reviewing it.
+
+Note: do NOT edit `lib/common.sh` except to intentionally change the master guard variable `DESTROY_SNAPSHOTS` from `0` to `1`. This is the permanent, explicit switch that enables real destructive execution; do not modify any other variables in `lib/common.sh` to try to bypass the safety model.
 
 This design prevents accidental destructive runs from command-line flags or
 CI environment variables.
@@ -123,3 +125,51 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 ```
 
 For programmatic use, prefer the `--help` output as the authoritative reference for flags and semantics.
+
+## Safe deletion checklist (TEST-ONLY workflow)
+
+Follow this workflow to VERIFY the interactive prompt and review a generated destroy plan without executing any `zfs destroy` commands. Do NOT edit `lib/common.sh` to enable execution until you have carefully reviewed the plan.
+
+1. Ensure the master destroy flag is disabled in `lib/common.sh`:
+
+```bash
+# in lib/common.sh
+DESTROY_SNAPSHOTS=0
+```
+
+2. Generate a destroy plan and trigger the execution prompt (prompt will appear, but execution will be blocked by the config):
+
+```bash
+REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+```
+
+- Expected outcome: the script will prompt `Execute destroy plan now?`.
+- After confirmation, because `DESTROY_SNAPSHOTS=0`, the tool will print a message that execution is blocked and will write the plan file (e.g. `/tmp/sff_destroy-plan-<timestamp>.sh`). No `zfs destroy` commands will run.
+
+3. Inspect the generated plan file before enabling execution:
+
+```bash
+less /tmp/sff_destroy-plan-YYYYMMDD-HHMMSS.sh
+grep "^# /sbin/zfs destroy" /tmp/sff_destroy-plan-YYYYMMDD-HHMMSS.sh
+```
+
+- Lines are intentionally commented (start with `# /sbin/zfs destroy ...`). Verify every snapshot listed is intended for deletion.
+
+4. (Optional) If you want a rehearsal run, keep the destroy lines commented and run the plan through `bash -n` or examine its contents. Do not enable execution yet.
+
+5. To apply the plan only after a careful review:
+
+- Edit `lib/common.sh` and set `DESTROY_SNAPSHOTS=1` (explicit manual change required).
+- Re-run the command with the same environment variable to trigger prompt and execution:
+
+```bash
+REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+```
+
+- On confirmation the tool will create an executable `exec_plan` (it uncomments destroy lines) and run it. Logs will be written to `/tmp/sff_destroy-exec-<timestamp>.log`.
+
+Safety reminders:
+- Always test on a small, non-production dataset first.
+- Keep `DESTROY_SNAPSHOTS=0` until you have manually verified the plan.
+- Back up any critical data before enabling real deletes.
+

@@ -69,8 +69,57 @@ the variables to match your environment. The `.env` file is ignored by git.
 
 ## Files and libraries
 
-- Entry point: `snapshots-find-file`
-- Shared libraries: `lib/common.sh`, `lib/zfs-search.sh`,
-  `lib/zfs-compare.sh`, `lib/zfs-cleanup.sh`
+Short, one-line descriptions for each tracked file. This catalog intentionally avoids listing internal function names — use the tool's `--help` output for exact CLI flags and behavior.
 
-Developer notes, detailed PRD, and change history: see [PRD.md](PRD.md).
+- `snapshots-find-file` : Main CLI entrypoint and orchestrator.
+- `lib/common.sh` : Shared utilities, logging helpers, and global configuration (including the master `DESTROY_SNAPSHOTS` guard).
+- `lib/zfs-search.sh` : Snapshot and dataset discovery and file-list extraction logic.
+- `lib/zfs-compare.sh` : Comparison logic and summary CSV generation.
+- `lib/zfs-cleanup.sh` : Cleanup planning and destroy-plan generation (plan-only flows).
+- `tests/validate_summary.sh` : Integration-style test that validates the summary CSV produced by a dry-run compare.
+- `tests/run_smoke_tests.sh` : Smoke-test runner that writes consolidated output to `tests/smoke.log`.
+- `run_tests.sh` : Convenience wrapper to run the test suite.
+- `run_and_log.sh` : Local developer helper to capture command output (not required to be committed).
+- `.env.example` : Template for a local `.env` used by tests (copy to `.env` and edit for local overrides). `.env` is ignored by Git.
+- `.gitignore` : Files and patterns ignored by Git (includes `.env`, test logs).
+- `PRD.md` : Product Requirements Document (requirements-only; not user-facing docs).
+- `copilot-context.md` : Developer/agent guidance and operational notes for contributors.
+- `LICENSE` : Project license.
+
+If you need fixture-driven `--test-mode` or CI integration, open an issue or propose a branch — current tests run against live ZFS datasets by default.
+
+## Quick CLI examples
+
+These quick examples give common workflows; run `./snapshots-find-file --help` for full usage and flags.
+
+- Show help:
+
+```bash
+./snapshots-find-file --help
+```
+
+- Search snapshots (non-destructive):
+
+```bash
+./snapshots-find-file -v -d pool/dataset -s "snapshot-pattern" -f "*.log"
+```
+
+- Compare snapshot inventories to a live dataset (dataloss detection):
+
+```bash
+./snapshots-find-file -c -v -d pool/dataset -s "*" -f "*"
+```
+
+- Generate a destroy plan (plan-only):
+
+```bash
+./snapshots-find-file --clean-snapshots
+```
+
+- Very-verbose function-entry tracing:
+
+```bash
+./snapshots-find-file -vv ...
+```
+
+For programmatic use, prefer the `--help` output as the authoritative reference for flags and semantics.

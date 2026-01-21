@@ -14,7 +14,8 @@ Principal Product Requirements
 - Maintainability: prefer functions <= ~60 lines; schedule a function-length audit and refactors where needed.
 - Preserve original author comments and help text in code and docs.
 
-Phase 3: Finalize Snapshot Deletion Workflow
+- Phase 3: Finalize Snapshot Deletion Workflow
+- Agent changes: `bash-expert` audit and compatibility updates (Bash 4.2 compatibility, safety hardening, temp-file and read/mapfile fixes)
 - Purpose: Prevent accidental destruction of snapshots that are the only remaining copy of files missing from the live dataset.
 
 Key implementation summary
@@ -52,6 +53,10 @@ or call `identify_and_suggest_deletion_candidates` and confirm the tool prints t
 Operational notes
 - To test interactive apply without permanently enabling the master guard, set `REQUEST_DESTROY_SNAPSHOTS=1` in the environment. The tool will prompt but will still not execute unless `DESTROY_SNAPSHOTS=1` is set in `lib/common.sh`.
 - Logs: comparison writes `comparison-<ts>.out` and `comparison-delta-<ts>.out`; the tool performs best-effort background compression of older logs.
+
+Developer workflow (cross-platform)
+- When the operator runs commands on a Linux host (e.g., RHEL), the agent will provide exact shell commands that explicitly redirect both stdout and stderr into a single log file. The operator will run those commands locally and share the produced log file for inspection. The agent will not execute remote commands directly.
+- Example: `bash tests/run_smoke_tests.sh > /tmp/sff_smoke.log 2>&1` — run this on your Linux machine and then paste the log contents for review.
 
 Refactor/backlog note
 - A function-length audit is required to schedule refactors for functions >60 lines. The workspace `logs/` file was empty earlier; see the `logs/function-lengths-<ts>.txt` created alongside this PRD update.

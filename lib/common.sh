@@ -233,6 +233,24 @@ function parse_arguments() {
   # This ensures getopts always starts parsing from the first argument,
   # preventing issues where it might skip arguments if OPTIND was previously modified.
   local OPTIND=1
+  # If user passed combined short flags like '-cvv', count 'v' occurrences
+  # across short-form args and enable very-verbose when two or more 'v's
+  # are present (e.g. -vv or -cvv). Also honor long-form flags.
+  local _v_count=0
+  for _a in "$@"; do
+    # honor explicit long-form
+    if [[ "$_a" == "--very-verbose" || "$_a" == "--vv" ]]; then
+      VVERBOSE=1; break
+    fi
+    # only consider short-form args that start with a single dash
+    if [[ "$_a" == -* && "$_a" != --* ]]; then
+      # count 'v' characters in the token
+      local _v_only
+      _v_only=${_a//[^v]/}
+      _v_count=$(( _v_count + ${#_v_only} ))
+      if [[ $_v_count -ge 2 ]]; then VVERBOSE=1; break; fi
+    fi
+  done
   # Support long-form options by pre-scanning and removing them from positional args
   local new_args=()
   while [[ $# -gt 0 ]]; do

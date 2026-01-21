@@ -2,6 +2,9 @@
 # ZFS comparison and delta analysis functions
 
 # Phase 2 helpers: split large compare functions into smaller responsibilities
+## MISSING_LEGEND_PRINTED was replaced by a pre-scan; keep for backward compat if referenced
+MISSING_LEGEND_PRINTED=0
+
 function _gather_live_files() {
   # Args: live_dataset_path tmp_base
   local live_dataset_path="$1"
@@ -53,6 +56,23 @@ function _csfld_process_sorted() {
 
   if [[ ${QUIET:-0} -eq 1 ]]; then
     echo -e "${YELLOW}Quiet mode enabled: per-file missing output suppressed; showing counts only.${NC}" >&2
+  fi
+
+  # If interactive verbose mode, pre-scan to determine whether any missing
+  # entries exist so we can print a single legend line above the list.
+  if [[ ${QUIET:-0} -ne 1 && ${VERBOSE:-0} -eq 1 ]]; then
+    local _tmp_paths
+    local _tmp_live
+    _tmp_paths=$(mktemp)
+    _tmp_live=$(mktemp)
+    awk -F'|' '{print $1}' "$sorted_snapshot_files_tmp" | sort > "$_tmp_paths"
+    sort "$live_files_tmp" > "$_tmp_live" 2>/dev/null || true
+    local _missing_count
+    _missing_count=$(comm -23 "$_tmp_paths" "$_tmp_live" | wc -l)
+    if [[ ${_missing_count:-0} -gt 0 ]]; then
+      echo -e "${GREEN}MISSING = (present in snapshot, absent in live)${NC}" >&2
+    fi
+    rm -f "$_tmp_paths" "$_tmp_live" || true
   fi
 
   local total_snapshot_entries=0

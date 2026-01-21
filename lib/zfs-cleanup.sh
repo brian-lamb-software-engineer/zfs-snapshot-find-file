@@ -215,11 +215,20 @@ function _evaluate_deletion_candidates_and_plan() {
         # Minimal heuristic: if there are no diffs against the previous snapshot
         # and the snapshot is not marked sacred, suggest it for deletion (dry-run).
         if [[ ${#diff_output_for_amr[@]} -eq 0 ]]; then
-          # Append the real destroy command to the plan file (uncommented)
-          # Respect --force (SFF_DESTROY_FORCE) by adding -f when requested
-          #echo "/sbin/zfs destroy -f \"${current_snap}\"" >> "$destroy_cmds_tmp"
-          ##echo "/sbin/zfs destroy \"${current_snap}\"" >> "$destroy_cmds_tmp"
-          printf '# /sbin/zfs destroy %s\n' "$current_snap" >> "$destroy_cmds_tmp"
+          # Construct human-readable reason for deletion to help reviewers.
+          local _reason="No diffs against previous snapshot and not marked sacred"
+          # Respect configured force flag when describing the command.
+          local _cmd
+          if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
+            _cmd="/sbin/zfs destroy -f ${current_snap}"
+          else
+            _cmd="/sbin/zfs destroy ${current_snap}"
+          fi
+          {
+            printf '\n# Snapshot: %s\n' "$current_snap"
+            printf '# BECAUSE: %s\n' "${_reason}"
+            printf '# Command: %s\n' "${_cmd}"
+          } >> "$destroy_cmds_tmp"
           echo "WOULD delete: $current_snap"
         else
           [[ $VERBOSE == 1 ]] && echo "Keeping ${current_snap}: diffs present"

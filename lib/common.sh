@@ -614,8 +614,8 @@ function print_comparison_summary() {
         if (val ~ /^[0-9]+$/) print "Total found in live dataset: " val;
         else print "Total found in live dataset: INVALID(" val ")";
       } else if (key=="missing") {
-        if (val ~ /^[0-9]+$/) print "Total missing (snapshot-only): " val;
-        else print "Total missing (snapshot-only): INVALID(" val ")";
+        if (val ~ /^[0-9]+$/) print "Total live missing (exists in snapshot-only): " val;
+        else print "Total live missing (exists in snapshot-only): INVALID(" val ")";
       } else if (key=="skipped_duplicates") {
         if (val ~ /^[0-9]+$/) print "Total skipped (duplicates): " val;
         else print "Total skipped (duplicates): INVALID(" val ")";

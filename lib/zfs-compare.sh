@@ -138,6 +138,19 @@ function _csfld_check_path() {
   else
     # Append the detailed missing-entry line to the comparison log only.
     echo -e "${GREEN}$live_equivalent_path (found in newest snapshot: [${WHITE}$snap_name${GREEN}] )${NC}" >> "$log_file"
+    # Also append to a canonical acc_deleted and snap_holding file under tmp_base
+    local _tmp_base
+    _tmp_base=$(dirname "$log_file")
+    local _acc_deleted_file="${_tmp_base}/${SFF_TMP_PREFIX}acc_deleted-${TIMESTAMP}.csv"
+    local _snap_holding_file="${_tmp_base}/${SFF_TMP_PREFIX}snap_holding-${TIMESTAMP}.txt"
+    # Record CSV line (snapshot, file_path). Avoid duplicates.
+    if [[ ! -f "${_acc_deleted_file}" ]] || ! grep -Fq "${snap_name}|${live_equivalent_path}" "${_acc_deleted_file}" 2>/dev/null; then
+      printf '%s|%s\n' "$snap_name" "$live_equivalent_path" >> "${_acc_deleted_file}" || true
+    fi
+    # Record snapshot into snap_holding for quick sacred lookups
+    if [[ ! -f "${_snap_holding_file}" ]] || ! grep -Fxq "$snap_name" "${_snap_holding_file}" 2>/dev/null; then
+      echo "$snap_name" >> "${_snap_holding_file}" || true
+    fi
     # If verbose and not in quiet mode, also emit a concise notice to stderr for interactive runs.
     if [[ ${QUIET:-0} -ne 1 && ${VERBOSE:-0} -eq 1 ]]; then
       echo -e "${GREEN}MISSING: $live_equivalent_path (snapshot: $snap_name)${NC}" >&2
@@ -352,7 +365,7 @@ function _csfld_write_summary() {
     echo "Total snapshot entries processed: $total_snapshot_entries"
     echo "Total ignored entries: $ignored_files_count"
     echo "Total found in live dataset: $found_in_live_count"
-    echo "Total missing (snapshot-only): $missing_files_count"
+    echo "Total live missing (exists in snapshot-only): $missing_files_count"
     echo "Total skipped (duplicates): ${skipped_reported_files_count:-0}"
     echo ""
   } >> "$log_file"

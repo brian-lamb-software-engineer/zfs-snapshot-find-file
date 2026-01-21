@@ -60,6 +60,11 @@ function identify_and_suggest_deletion_candidates() {
 
   vlog "START datasets_count=${#datasets_array[@]} prefix=${dataset_path_prefix}"
 
+  # Print temp file paths we will use so it's easy to verify which files are
+  # consulted during evaluation (helps debug mismatches between compare vs cleanup).
+  local tmp_base_preview="${LOG_DIR:-${TMPDIR:-/tmp}}"
+  echo -e "Using temp base for cleanup: ${tmp_base_preview}" >&2
+
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
     return
@@ -104,7 +109,7 @@ function identify_and_suggest_deletion_candidates() {
   echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
   echo ""
   # Phase 2: evaluate candidates and build plan
-  _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$destroy_cmds_tmp" "$plan_file"
+  _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$acc_deleted_file" "$destroy_cmds_tmp" "$plan_file"
 
   # If plan exists, handle execution and cleanup in helpers
   _maybe_execute_plan "$destroy_cmds_tmp" "$plan_file" "$tmp_base" "$TIMESTAMP"
@@ -174,16 +179,25 @@ function _cleanup_cleanup_temp_files() {
 }
 
 function _evaluate_deletion_candidates_and_plan() {
-  # Args: datasets_file, snap_holding_file, destroy_cmds_tmp, plan_file
+  # Args: datasets_file, snap_holding_file, acc_deleted_file, destroy_cmds_tmp, plan_file
   local datasets_file="$1"
   local snap_holding_file="$2"
-  local destroy_cmds_tmp="$3"
-  local plan_file="$4"
+  local acc_deleted_file="$3"
+  local destroy_cmds_tmp="$4"
+  local plan_file="$5"
 
   # Build an associative set of sacred snapshots
   declare -A sacred
   if [[ -f "$snap_holding_file" ]]; then
     while IFS= read -r s; do sacred["$s"]=1; done < "$snap_holding_file"
+  fi
+
+  # Determine tmp base from plan file so we can look for any acc_deleted files
+  local _tmp_base_from_plan
+  if [[ -n "$plan_file" ]]; then
+    _tmp_base_from_plan=$(dirname "$plan_file")
+  else
+    _tmp_base_from_plan="${LOG_DIR:-${TMPDIR:-/tmp}}"
   fi
 
   vlog "datasets_file=${datasets_file} START"
@@ -203,6 +217,27 @@ function _evaluate_deletion_candidates_and_plan() {
         is_deletion_candidate="false"
         [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains unignored files deleted from live."
       else
+        # Extra safety: check acc_deleted_file(s) for evidence of files present
+        # in the snapshot but absent in live. We accept multiple candidate files
+        # (the one prepared by cleanup or ones produced by compare runs).
+        local _found_in_acc=0
+        local -a _acc_files
+        if [[ -f "$acc_deleted_file" ]]; then
+          _acc_files+=("$acc_deleted_file")
+        fi
+        # also include any canonical sff_acc_deleted files in the tmp base
+        mapfile -t _acc_glob < <(ls "${_tmp_base_from_plan}/${SFF_TMP_PREFIX}acc_deleted"* 2>/dev/null || true)
+        for _f in "${_acc_glob[@]}"; do _acc_files+=("$_f"); done
+        for _af in "${_acc_files[@]}"; do
+          if [[ -f "$_af" ]] && grep -Fq "$current_snap" "$_af" 2>/dev/null; then
+            _found_in_acc=1; break
+          fi
+        done
+        if [[ "$_found_in_acc" -eq 1 ]]; then
+          is_deletion_candidate="false"
+          [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains files removed from live (refer to acc_deleted files)."
+          continue
+        fi
         local compare_from
         if (( i > 0 )); then compare_from="${snapshots[i-1]}"; else compare_from="$dataset"; fi
         local compare_to="$current_snap"

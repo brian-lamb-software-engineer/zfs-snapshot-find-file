@@ -369,11 +369,13 @@ function _csfld_write_summary() {
 function log_snapshot_deltas() {
   local dataset_path="$1"
   shift # Remove the first argument (dataset_path)
-  #local -n datasets_array="$2" # Use nameref to access the global DATASETS array
-  #local datasets_array_name="$2" # Variable to hold the name of the array
-  # Use indirect expansion to access the array elements
-  # This pattern means: ${!variable_holding_array_name[@]}
-  #local -a datasets_array=("${!datasets_array_name[@]}") # Populate local array from global array by name
+  # Bash `nameref` (local -n) example is left as a commented snippet for
+  # reference. `nameref` requires Bash >= 4.3; on older distributions
+  # (e.g. RHEL7 with Bash 4.2) it is not available. Keep the example
+  # commented or enable it behind a runtime version check like below.
+  # For portability across Bash versions (including Bash 4.2 on RHEL7)
+  # avoid using `local -n` (nameref). Copy the passed dataset list
+  # into a local array for processing.
   local -a datasets_array=("$@")
 
   vlog "dataset_path=${dataset_path} datasets_count=${#datasets_array[@]}"

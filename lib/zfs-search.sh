@@ -74,7 +74,8 @@ function _should_skip_for_trailing_wildcard() {
   local dataset="$1"
   if [[ ! -z "$TRAILING_WILDCARD_CNT" ]] && [[ "$TRAILING_WILDCARD_CNT" -gt 0 ]]; then
     local DS_CONST_ARR
-    IFS=$'\n' read -r -d '' -a DS_CONST_ARR < <(echo "$dataset" | tr '/' '\n') || true
+    # Split dataset components into array using IFS for Bash 4.2 compatibility
+    IFS='/' read -r -a DS_CONST_ARR <<< "$dataset" || true
     local DS_CONST_ARR_CNT=${#DS_CONST_ARR[@]}
     if [[ "$DS_CONST_ARR_CNT" -le "$BASE_DSP_CNT" ]]; then
       [[ $VERBOSE == 1  ]] && echo -e "Skipping dataset (too high in hierarchy for trailing wildcards): ${dataset}"

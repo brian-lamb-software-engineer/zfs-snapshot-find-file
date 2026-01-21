@@ -263,7 +263,7 @@ function parse_arguments() {
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
         SFF_DESTROY_FORCE=1; shift ;;
-      --very-verbose|--vv)
+      --very-verbose)
         VVERBOSE=1; shift ;;
       --*)
         echo -e "${YELLOW}Unknown option: $1${NC}"
@@ -276,7 +276,8 @@ function parse_arguments() {
   done
   # restore positional args for getopts
   set -- "${new_args[@]}"
-  while getopts ":d:f:o:s:rvhcV" ARG; do
+  # include 'q' and 'D' in the option string so getopts recognizes them
+  while getopts ":d:f:o:s:rvhcVqD" ARG; do
     case "$ARG" in
       q)
         QUIET=1 ;;
@@ -415,10 +416,11 @@ function _isp_finalize() {
     local -a tmp_datasets
 
     if [[ $recursive_flag == 1 ]]; then
-      IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null | tail -n +2)
+      # Use mapfile for Bash 4.2 compatibility and to safely read lines into an array
+      mapfile -t tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null | tail -n +2)
     else
       # Include only the specified dataset
-      IFS=$'\n' read -r -d '' -a tmp_datasets < <(zfs list -H -o name "${datasetpath%/}" 2>/dev/null)
+      mapfile -t tmp_datasets < <(zfs list -H -o name "${datasetpath%/}" 2>/dev/null)
     fi
 
     # Assign the temporary array content to the global DATASETS array

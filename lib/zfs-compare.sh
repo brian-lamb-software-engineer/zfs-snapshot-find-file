@@ -141,8 +141,8 @@ function _csfld_check_path() {
     # Also append to a canonical acc_deleted and snap_holding file under tmp_base
     local _tmp_base
     _tmp_base=$(dirname "$log_file")
-    local _acc_deleted_file="${_tmp_base}/${SFF_TMP_PREFIX}acc_deleted-${TIMESTAMP}.csv"
-    local _snap_holding_file="${_tmp_base}/${SFF_TMP_PREFIX}snap_holding-${TIMESTAMP}.txt"
+    local _acc_deleted_file="${_tmp_base}/${SFF_TMP_PREFIX}acc_deleted.csv"
+    local _snap_holding_file="${_tmp_base}/${SFF_TMP_PREFIX}snap_holding.txt"
     # Record CSV line (snapshot, file_path). Avoid duplicates.
     if [[ ! -f "${_acc_deleted_file}" ]] || ! grep -Fq "${snap_name}|${live_equivalent_path}" "${_acc_deleted_file}" 2>/dev/null; then
       printf '%s|%s\n' "$snap_name" "$live_equivalent_path" >> "${_acc_deleted_file}" || true
@@ -168,7 +168,7 @@ function _process_diff_pair() {
 
   vlog "parent=${parent_compare_point} current=${current_compare_point} delta_log=${delta_log_file}"
 
-  /sbin/zfs diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
+  sff_zfs_diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
     local diff_type_char="${type:0:1}"
     local full_path="${path}"
     local is_ignored="false"
@@ -231,8 +231,8 @@ function compare_snapshot_files_to_live_dataset() {
   vlog "raw=${raw_snapshot_file_list_tmp} live=${live_dataset_path}"
 
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
-  local log_file="$tmp_base/comparison-$TIMESTAMP.out"
-  local ignored_log_file="$tmp_base/compare-ignore-$TIMESTAMP.out"
+  local log_file="$tmp_base/comparison.out"
+  local ignored_log_file="$tmp_base/compare-ignore.out"
 
   # Informational output should go to stderr so stdout remains for data.
   echo -e "${CYAN}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}" >&2
@@ -297,7 +297,7 @@ function _csfld_write_summary_csv() {
   local missing_files_count="$5"
   local skipped_reported_files_count="$6"
   # Write a CSV summary file (defensive: strip ANSI sequences)
-  local summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
+  local summary_csv="$tmp_base/comparison-summary.csv"
   local tmp_csv
   tmp_csv=$(mktemp "${tmp_base}/comparison-summary-tmp.XXXXXX")
   {
@@ -395,7 +395,7 @@ function log_snapshot_deltas() {
 
   # Ensure we write logs into configured LOG_DIR (or TMP fallback)
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
-  local delta_log_file="$tmp_base/comparison-delta-$TIMESTAMP.out"
+  local delta_log_file="$tmp_base/comparison-delta.out"
 
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No datasets found for delta analysis. Skipping.${NC}"

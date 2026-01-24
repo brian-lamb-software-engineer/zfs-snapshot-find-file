@@ -31,9 +31,9 @@ ZFSSNAPDIR=".zfs/snapshot"
 FILENAME="*"
 FILENAME_ARR=()
 FILEARR=()
-#LOG_DIR=/tmp #default
-LOG_DIR=/tmp
-
+# Default log/tmp directory root for sff artifacts (per-run subdir includes SHORT_TS)
+# We place run artifacts under /tmp/sff/<SHORT_TS>/ so filenames themselves need not include the timestamp.
+LOG_DIR_ROOT=/tmp/sff
 # Color codes for output
 COL="\033["
 RED="${COL}0;31m"
@@ -67,6 +67,9 @@ DEFAULT_IGNORE_REGEX_PATTERNS=(
 IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
 # shellcheck disable=SC2034
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+# Short timestamp without year for compact filenames (MMDD-HHMMSS)
+SHORT_TS="${TIMESTAMP:4}"
+LOG_DIR="$LOG_DIR_ROOT/${SHORT_TS}"
 DATASETPATH=""
 SNAPREGEX=""
 RECURSIVE=0
@@ -81,7 +84,11 @@ TRAILING_WILDCARD_CNT=0
 BASE_DSP_CNT=0
 DATASETS=() # Will store the list of datasets to iterate
 
-all_snapshot_files_found_tmp=$(mktemp "${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.XXXXXX")
+# Ensure the per-run directory exists early so writers can use it.
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+all_snapshot_files_found_tmp="${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log"
+: > "$all_snapshot_files_found_tmp" 2>/dev/null || true
 
 function help(){
   cat <<'HELP'
@@ -621,4 +628,78 @@ function print_comparison_summary() {
         else print "Total skipped (duplicates): INVALID(" val ")";
       }
     }' "$summary_csv"
+}
+
+# Command-run wrapper: logs command and its output to a per-run commands log
+# Usage: sff_run <cmd> [args...]
+function sff_run() {
+  vlog "sff_run: $*"
+  local logfile="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
+  mkdir -p "$(dirname "$logfile")" 2>/dev/null || true
+  echo "RUN: $*" >> "$logfile"
+  if "$@" > >(tee -a "$logfile") 2> >(tee -a "$logfile" >&2); then
+    echo "EXIT:0" >> "$logfile"
+    return 0
+  else
+    local st=$?
+    echo "EXIT:$st" >> "$logfile"
+    return $st
+  fi
+}
+
+# ZFS diff wrapper: normalizes names, retries on ordering or leading-slash errors,
+# logs the full output to the commands log, and prints the diff output to stdout
+# so callers may pipe it as before.
+function sff_zfs_diff() {
+  local a="$1" b="$2"
+  local logfile="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
+  mkdir -p "$(dirname "$logfile")" 2>/dev/null || true
+  local zfs_bin
+  if [[ -x /sbin/zfs ]]; then
+    zfs_bin="/sbin/zfs"
+  elif command -v zfs >/dev/null 2>&1; then
+    zfs_bin="$(command -v zfs)"
+  else
+    zfs_bin="zfs"
+  fi
+
+  # Strip leading slashes from dataset/snapshot names (normalize)
+  a="${a#/}"
+  b="${b#/}"
+
+  local tmp
+  tmp="${LOG_DIR}/${SFF_TMP_PREFIX}zfs-diff.log"
+
+  "$zfs_bin" diff "$a" "$b" >"$tmp" 2>&1 || true
+  local st=$?
+  echo "RUN: $zfs_bin diff $a $b" >> "$logfile"
+  cat "$tmp" >> "$logfile"
+  echo "EXIT:$st" >> "$logfile"
+
+  if [[ $st -ne 0 ]]; then
+    local out
+    out=$(cat "$tmp")
+    if echo "$out" | grep -qi "leading slash"; then
+      "$zfs_bin" diff "${a#/}" "${b#/}" >"$tmp" 2>&1
+      st=$?
+      echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/}" >> "$logfile"
+      cat "$tmp" >> "$logfile"
+      echo "RETRY(strip) EXIT:$st" >> "$logfile"
+    fi
+    if [[ $st -ne 0 ]]; then
+      out=$(cat "$tmp")
+      if echo "$out" | grep -qi "Not an earlier snapshot"; then
+        "$zfs_bin" diff "$b" "$a" >"$tmp" 2>&1
+        st=$?
+        echo "RETRY(swap) RUN: $zfs_bin diff $b $a" >> "$logfile"
+        cat "$tmp" >> "$logfile"
+        echo "RETRY(swap) EXIT:$st" >> "$logfile"
+      fi
+    fi
+  fi
+
+  # Emit the diff output to stdout for callers to consume
+  cat "$tmp"
+  rm -f "$tmp" || true
+  return $st
 }

@@ -378,20 +378,31 @@ function _evaluate_deletion_candidates_and_plan() {
         # and the snapshot is not marked sacred, suggest it for deletion (dry-run).
         if [[ ${#diff_output_for_amr[@]} -eq 0 ]]; then
           # Construct human-readable reason for deletion to help reviewers.
-          local _reason="No diffs against previous snapshot and not marked sacred"
-          # Respect configured force flag when describing the command.
-          local _cmd
-          if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
-            _cmd="/sbin/zfs destroy -f ${current_snap}"
-          else
-            _cmd="/sbin/zfs destroy ${current_snap}"
-          fi
-          {
-            printf '\n# Snapshot: %s\n' "$current_snap"
-            printf '# BECAUSE: %s\n' "${_reason}"
-            printf '# Command: %s\n' "${_cmd}"
-          } >> "$destroy_cmds_tmp"
-          echo "WOULD delete: $current_snap"
+            local _reason_short="No diffs against previous snapshot and not marked sacred"
+            # Build a more explicit detail block so operators can see final reasoning
+            # (e.g. list compare points that had no differences).
+            local _detail_msg
+            _detail_msg="The following snapshots have NO DIFFERENCE\n- ${compare_from}\n- ${current_snap}"
+            # Respect configured force flag when describing the command.
+            local _cmd
+            if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
+              _cmd="/sbin/zfs destroy -f ${current_snap}"
+            else
+              _cmd="/sbin/zfs destroy ${current_snap}"
+            fi
+            {
+              printf '\n# Snapshot: %s\n' "$current_snap"
+              printf '# BECAUSE: %s\n' "${_reason_short}"
+              # Emit a multi-line DETAIL block with '#' prefix so the plan
+              # remains comment-first and easily human-reviewable.
+              printf '%s\n' "# DETAIL: The following snapshots have NO DIFFERENCE"
+              printf '# DETAIL: - %s\n' "${compare_from}"
+              printf '# DETAIL: - %s\n' "${current_snap}"
+              printf '# Command: %s\n' "${_cmd}"
+            } >> "$destroy_cmds_tmp"
+            # Print final reasoning to stdout so the operator sees why the
+            # candidate was chosen before the dry-run notice.
+            echo -e "${YELLOW}WOULD ${RED}DESTROY${YELLOW}: ${WHITE}${current_snap}${NC}  because:\nThe following snapshots have NO DIFFERENCE\n - ${compare_from}\n - ${current_snap}"
         else
           [[ $VERBOSE == 1 ]] && echo "Keeping ${current_snap}: diffs present"
         fi

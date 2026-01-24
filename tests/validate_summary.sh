@@ -60,7 +60,7 @@ fi
 echo "Run output saved to: $RUN_OUT" >> "$TEST_LOG"
 
 # Find produced summary CSV
-summary=$(grep -oE "/tmp/comparison-summary-[0-9]{8}-[0-9]{6}\.csv" "$RUN_OUT" | tail -n1 || true)
+summary=$(grep -oE "/tmp/.*/comparison-summary\\.csv" "$RUN_OUT" | tail -n1 || true)
 if [[ -z "$summary" || ! -f "$summary" ]]; then
   echo "ERROR: No summary CSV found in run output." >> "$TEST_LOG"
   echo "--- run output (tail 200) ---" >> "$TEST_LOG"

@@ -46,7 +46,7 @@ if [[ $COMPARE == 1 ]]; then
   echo -e "${CYAN}Comparison process complete.${NC}"
 
   # If user requested deletion orchestration, run the cleanup flow now.
-  if [[ ${SFF_DELETE_PLAN:-0} -eq 1 || ${DESTROY_SNAPSHOTS:-0} -eq 1 ]]; then
+  if [[ ${CREATE_DELETE_PLAN:-0} -eq 1 || ${ALLOW_DESTROY_SNAPS:-0} -eq 1 ]]; then
     vlog "main: running identify_and_suggest_deletion_candidates (compare mode)"
     # Respect runtime opt-out flag
     if [[ "${SKIP_PLAN:-0}" -eq 1 ]]; then
@@ -54,7 +54,7 @@ if [[ $COMPARE == 1 ]]; then
     else
       # Call cleanup orchestration for the same dataset path. If the plan/apply
       # flow is desired, run with `--clean-snapshots` to generate a plan; applying
-      # a generated plan requires setting `DESTROY_SNAPSHOTS=1` in `lib/common.sh`.
+      # a generated plan requires setting `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh`.
       identify_and_suggest_deletion_candidates "$DATASETPATH_FS" "${DATASETS[@]}"
     fi
   fi
@@ -75,7 +75,7 @@ fi
 
 # Non-compare-mode cleanup invocation
 if [[ $COMPARE != 1 ]]; then
-  if [[ ${SFF_DELETE_PLAN:-0} -eq 1 || ${DESTROY_SNAPSHOTS:-0} -eq 1 ]]; then
+  if [[ ${CREATE_DELETE_PLAN:-0} -eq 1 || ${ALLOW_DESTROY_SNAPS:-0} -eq 1 ]]; then
     vlog "main: running identify_and_suggest_deletion_candidates (non-compare mode)"
     if [[ "${SKIP_PLAN:-0}" -eq 1 ]]; then
       echo -e "${YELLOW}Skipping plan generation this run (--skip-plan set).${NC}"

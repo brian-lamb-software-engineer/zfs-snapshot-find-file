@@ -1,84 +1,60 @@
 #!/bin/bash
 # common code lives on this file, code that all the other libs use, as well as main vars
 
-# Common variables, constants, and utility functions
-#
+#########################
+# TOP VARS / CONSTANTS
+# adjust these to change the configuration
+##
+
 # Plan-only delete flag (creates a destroy plan but does not execute it).
 # NOTE: This is a config-level setting. To generate plans set this to 1
-# or pass --clean-snapshots; editing this file is the permanent switch.
-SFF_DELETE_PLAN=1
+# or pass --clean-snapshots
+CREATE_DELETE_PLAN=1
 # Master destroy execution flag (must be explicitly enabled in config).
 # WARNING: This is the master switch for destructive execution. Do NOT
-# enable it via runtime flags — edit this file to set `DESTROY_SNAPSHOTS=1`.
-DESTROY_SNAPSHOTS=0
-# Deletion / destroy flags (safe defaults)
-SFF_DESTROY_FORCE=0
+# enable it via runtime flags — edit this file to set `ALLOW_DESTROY_SNAPS=1`.
+ALLOW_DESTROY_SNAPS=0
+# Deletion / destroy flags (safe defaults), enables --force to the destroy command
+ENABLE_ZFS_DESTROY_FORCE=0
 # shellcheck disable=SC2034
 # Intentionally not referenced in this file; used by callers/tests.
 # shellcheck disable=SC2034
 # (keeps shellcheck quiet about intentionally-unused config vars)
 
-# CLI-request tracking var for destroy (declared at top so it's visible/configurable)
+# Runtime request (tracking var) flag indicating the user requested destroy/apply for this run (e.g., via env/CLI). Actual destructive execution still requires the master ALLOW_DESTROY_SNAPS config to be enabled. 
 # Preserve any environment-provided request flag so callers can set it with
-# `REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file ...` or `export REQUEST_DESTROY_SNAPSHOTS=1`.
-REQUEST_DESTROY_SNAPSHOTS=${REQUEST_DESTROY_SNAPSHOTS:-0}
+# `REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file ...` or `export REQUEST_ALLOW_DESTROY_SNAPS=1`.
+# 
+REQUEST_ALLOW_DESTROY_SNAPS=${REQUEST_ALLOW_DESTROY_SNAPS:-0}
 # When a destroy execution was requested but the top-level master flag is disabled,
 # set this so callers can emit a yellow notice near destroy-plan/apply output.
-DESTROY_DISABLED_NOTICE=0
-# Request opt-in zfs-diff fast path (when present, prefer zfs diff over find)
-REQUEST_ZFS_COMPARE=${REQUEST_ZFS_COMPARE:-0}
+NOTIFY_DESTROY_IS_DISABLED=0
+# Request runtime flag to opt-in zfs-diff fast path in the the compare/cleanup flow (when present, prefer zfs diff fast-path over find) 
+# when set the tool will attempt zdiff and fall back to the legacy find path on per-dataset failure.
+USE_ZDIFF=${USE_ZDIFF:-0}
 # shellcheck disable=SC2034
-# `REQUEST_ZFS_COMPARE` is set/read across files; keep top-level declaration.
+# `USE_ZDIFF` is set/read across files; keep top-level declaration.
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
 # Set these to 0 here to permanently disable plan/apply unless this file is edited.
-SFF_DELETE_PLAN_ALLOWED=${SFF_DELETE_PLAN}
-DESTROY_SNAPSHOTS_ALLOWED=${DESTROY_SNAPSHOTS}
-# Default log/tmp directory root for sff artifacts (per-run subdir includes SHORT_TS)
+ALLOW_CREATE_DELETE_PLAN=${CREATE_DELETE_PLAN}
+ALLOW_DESTROY_SNAPS=${ALLOW_DESTROY_SNAPS}
+# Default log/tmp directory root for sff artifacts (per-run subdir includes SHORT_TIMESTAMP)
 # Allow environment override: if LOG_DIR_ROOT is already exported, keep it.
-# We place run artifacts under ${LOG_DIR_ROOT}/${SHORT_TS}/ so filenames themselves need not include the timestamp.
+# We place run artifacts under ${LOG_DIR_ROOT}/${SHORT_TIMESTAMP}/ so filenames themselves need not include the timestamp.
 LOG_DIR_ROOT="${LOG_DIR_ROOT:-/tmp/sff}"
 # Prefix for temporary files created by this tool
 SFF_TMP_PREFIX="sff_"
 # ZFS snapshot dir constant
 # shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
-# Default file-search pattern and arrays
-FILENAME="*"
-FILENAME_ARR=()
-FILEARR=()
 
+# REGEX_IGNORE_PATTERNS_DEFAULT, By default, ignore these common filesystem noise patterns. Users may override
 # Example 1: Ignore cache directories
 # Example 2: Ignore temporary directories
 # Example 3: Ignore macOS specific files
 # Example 4: Ignore Windows specific thumbnail files
-DEFAULT_IGNORE_REGEX_PATTERNS=("^.*\\.cache/.*$" "^.*/tmp/.*$" "^.*/\\.DS_Store$" "^.*/thumbs\\.db$")
-# By default, ignore these common filesystem noise patterns. Users may override
-# `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
-# shellcheck disable=SC2034
-IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
-LOG_DIR="${LOG_DIR_ROOT%/}${SHORT_TS:+/${SHORT_TS}}"
-DATASETPATH=""
-SNAPREGEX=""
-RECURSIVE=0
-COMPARE=0
-VERBOSE=0
-VVERBOSE=0
-QUIET=0
-# shellcheck disable=SC2034
-# `QUIET` is read by other modules; keep declaration to document config.
-# shellcheck disable=SC2034
-OTHERFILE="" # Although not currently used in core logic, keep for completeness
-DSP_CONSTITUENTS_ARR_CNT=0
-TRAILING_WILDCARD_CNT=0
-BASE_DSP_CNT=0
+REGEX_IGNORE_PATTERNS_DEFAULT=("^.*\\.cache/.*$" "^.*/tmp/.*$" "^.*/\\.DS_Store$" "^.*/thumbs\\.db$")
 
-# Export configuration flags so they are visible to sourced modules and to
-# silence static analysis (shellcheck) about intentionally-declared globals.
-export SFF_DESTROY_FORCE BENCH SKIP_PLAN QUIET OTHERFILE REQUEST_ZFS_COMPARE
-
-##
-# RUNTIME CONFIGS AND VARS THAT DONT NEED TO BE TOUCHED
-#
 # Color codes for output
 COL="\033["
 RED="${COL}0;31m"
@@ -93,18 +69,72 @@ PURPLE="${COL}0;35m"
 # shellcheck disable=SC2034
 GREEN="${COL}0;32m"
 NC="${COL}0m" # No Color
+
+# Export configuration flags so they are visible to sourced modules and to
+# silence static analysis (shellcheck) about intentionally-declared globals.
+export ENABLE_ZFS_DESTROY_FORCE BENCH SKIP_PLAN QUIET OTHERFILE USE_ZDIFF
+
+#####
+# Internal runtime globals
+#  populated at runtime — not user-configurable"
+#  leave them as non-exported globals.
+##
+
+# User-supplied dataset identifier (filesystem path or ZFS name) passed via -d; normalized 
+#  later for filesystem vs ZFS-name use and used as the starting point for dataset
+#  discovery and processing.
+DATASETPATH=""
+SNAP_SEARCH_REGEX=""
+RECURSIVE=0
+COMPARE=0
+VERBOSE=0
+VVERBOSE=0
+# shellcheck disable=SC2034
+# `QUIET` is read by other modules; keep declaration to document config.
+QUIET=0
+# shellcheck disable=SC2034
+# otherfile is additional filenames passed via -o, legacy and retained for compatibility 
+OTHERFILE="" # Although not currently used in core logic, keep for completeness
+# DATASET_SEGMNTS Integer: the number of path components in the specified dataset (used when computing trailing-wildcard counts and base dataset depth).
+DATASET_SEGMNTS=0
+DATASET_SEGMNT_WLDCRDS=0
+BASE_DSP_CNT=0
+# Default file-search pattern and arrays
+#FILEARR is tokenized find args build from -f input
+FILEARR=()
+# the legacy single-file search pattern (defaults to *); kept for backward-compatibility when -f is not supplied as multiple entries
+FILENAME="*"
+FILENAME_ARR=()
 FILESTR=""
 # shellcheck disable=SC2034
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 # Short timestamp without year for compact filenames (MMDD-HHMMSS)
-SHORT_TS="${TIMESTAMP:4}"
+SHORT_TIMESTAMP="${TIMESTAMP:4}"
 DATASETS=() # Will store the list of datasets to iterate
+# shellcheck disable=SC2034
+REGEX_IGNORE_PATTERNS=("${REGEX_IGNORE_PATTERNS_DEFAULT[@]}")
+LOG_DIR="${LOG_DIR_ROOT%/}${SHORT_TIMESTAMP:+/${SHORT_TIMESTAMP}}"
+
+############################################################
+# BEGIN CODE
+## 
+
+#########################
+# setup per-run artifacts
+# need to ensure this is done before anything else.  If this was put into a function,
+#  e.g. init_run_artifacts() would need to ensure no helper runs before main calls it.  
 
 # Ensure the per-run directory exists early so writers can use it.
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 
+# sets the path for the run-scoped list of snapshot files, truncates or creates that file
+#  (the : is a no-op; the redirection creates/truncates). Errors silenced and non-fatal
 all_snapshot_files_found_tmp="${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log"
 : > "$all_snapshot_files_found_tmp" 2>/dev/null || true
+
+
+##################
+# BEGIN FUNCTIONS
 
 function help(){
   cat <<'HELP'
@@ -120,7 +150,7 @@ USAGE:
   -d (required) <dataset-path to search through>
   -c (optional) (compare snapshot files to live dataset files to find missing ones)
      (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
-    -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
+  -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
       Use with or without `-c` or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
   -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
   -o (optional) <other-file-your-searching--for>
@@ -129,18 +159,25 @@ USAGE:
   -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
   --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
-  -h (this help)
-  --skip-plan (optional) skip cleanup/plan generation for this run even if SFF_DELETE_PLAN=1
+  --skip-plan (optional) skip cleanup/plan generation for this run even if CREATE_DELETE_PLAN=1
+   -h (this help)
 
 Notes for deletion:
   - By default no destroys are executed. To generate a plan use --clean-snapshots.
-  - To attempt to apply destroys enable `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and then
+  - To attempt to apply destroys enable `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` and then
     re-run with `--clean-snapshots` to generate/apply the plan. Applying a generated
     plan requires enabling the master switch and confirming the interactive prompt.
   - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
 
   -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that aren't trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used
 
+HELP
+  help_usage_examples
+  exit 1;
+}
+
+function help_usage_examples() {
+  cat <<'EXAMPLES'
 Examples:
 
   # search recursively, for all files in a given dataset, and its childs datasets recursively, and print verbose output
@@ -168,11 +205,11 @@ Examples:
   # search recursively with verbose, through all datasets snaps, and for all files (short form) (e.g. list all snapshot files)
   snapshots-find-file -d "/pool" -rv
 
-  # Deletion examples — plan and force (apply requires enabling DESTROY_SNAPSHOTS in config)
+  # Deletion examples — plan and force (apply requires enabling ALLOW_DESTROY_SNAPS in config)
   # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
   snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
 
-  # To apply a generated plan interactively, enable DESTROY_SNAPSHOTS=1 in lib/common.sh,
+  # To apply a generated plan interactively, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh,
   # then re-run with --clean-snapshots to generate and (after confirmation) execute the plan.
   # force destroy in generated plan (adds -f to zfs destroy when executed)
   snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
@@ -180,11 +217,17 @@ Examples:
   # advanced: call cleanup function directly for a subset of datasets (debug)
   bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
 
-  
-
 Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/').
-HELP
-  exit 1;
+EXAMPLES
+}
+
+function help_error_response() {
+  local opt="${1:-}";
+  echo
+  help_usage_examples
+  echo
+  echo -e "${YELLOW}Error: Unrecognized option: ${opt}${NC}"
+  exit 1
 }
 
 # Counter for recorded found files across the run
@@ -247,15 +290,16 @@ function prompt_confirm() {
 }
 
 # Print a yellow warning if destroy execution was requested but the
-# top-level `DESTROY_SNAPSHOTS_ALLOWED` is disabled. Callers (cleanup) should
+# top-level `ALLOW_DESTROY_SNAPS` is disabled. Callers (cleanup) should
 # invoke this just above any destroy-plan messages so the notice appears in
 # proximity to the destroy output.
-function print_destroy_disabled_notice() {
-  if [[ "${DESTROY_DISABLED_NOTICE:-0}" -eq 1 ]]; then
-    echo -e "${YELLOW}Note: Destroy execution requested but 'DESTROY_SNAPSHOTS' is disabled in configuration.${NC}"
+function print_NOTIFY_DESTROY_IS_DISABLED() {
+  if [[ "${NOTIFY_DESTROY_IS_DISABLED:-0}" -eq 1 ]]; then
+    echo -e "${YELLOW}Note: Destroy execution requested but 'ALLOW_DESTROY_SNAPS' is disabled in configuration.${NC}"
   fi
 }
 
+# function too long, break up
 function parse_arguments() {
   # CRUCIAL FIX: Reset OPTIND to 1 before calling getopts.
   # This ensures getopts always starts parsing from the first argument,
@@ -269,6 +313,16 @@ function parse_arguments() {
     # honor explicit long-form
     if [[ "$_a" == "--very-verbose" || "$_a" == "--vv" ]]; then
       VVERBOSE=1; break
+    fi
+    # If a short-form token contains 'd' or 'f' combined with other letters (eg '-dqz' or '-qfX'),
+    # warn the user — '-d' and '-f' must be provided as standalone tokens followed by their
+    # respective arguments (e.g. `-d /pool/dataset` and `-f index.html`). Combined short flags
+    # confuse getopts parsing and may consume the wrong token as the option value.
+    if [[ "$_a" == -?* && "$_a" != --* && ${#_a} -gt 2 ]]; then
+      if [[ "$_a" == *d* || "$_a" == *f* ]]; then
+        echo -e "${YELLOW}Error: -d and -f must be separate tokens and placed immediately before their argument.\nExample: snapshots-find-file -d /pool/data/set -f index.html --clean-snapshots${NC}" >&2
+        exit 1
+      fi
     fi
     # only consider short-form args that start with a single dash
     if [[ "$_a" == -* && "$_a" != --* ]]; then
@@ -291,11 +345,11 @@ function parse_arguments() {
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
         # shellcheck disable=SC2034
-        SFF_DESTROY_FORCE=1; shift ;;
+        ENABLE_ZFS_DESTROY_FORCE=1; shift ;;
       --very-verbose)
         VVERBOSE=1; shift ;;
       --zfs-diff)
-        REQUEST_ZFS_COMPARE=1; shift ;;
+        USE_ZDIFF=1; shift ;;
       --bench)
         # shellcheck disable=SC2034
         BENCH=1; shift ;;
@@ -303,10 +357,7 @@ function parse_arguments() {
         # shellcheck disable=SC2034
         SKIP_PLAN=1; shift ;;
       --*)
-        echo -e "${YELLOW}Unknown option: $1${NC}"
-        echo "Use --clean-snapshots, --force, --very-verbose or see help.";
-        help
-        exit 1
+        help_error_response "$1"
         ;;
       *) new_args+=("$1"); shift ;;
     esac
@@ -328,7 +379,7 @@ function parse_arguments() {
          DATASETPATH=$OPTARG ;;
       s) # echo "Running -$ARG flag which is a placeholder to pass a snapshot arg with it"
          # echo "-$ARG arg is $OPTARG"
-         SNAPREGEX=$OPTARG ;;
+         SNAP_SEARCH_REGEX=$OPTARG ;;
       f) # echo "Running -$ARG flag which is a placeholder to pass a filename arg with it"
         # echo "-$ARG arg is $OPTARG"
         FILENAME_ARR+=("${OPTARG}") ;;
@@ -341,14 +392,14 @@ function parse_arguments() {
       D)
         REQUEST_SNAP_DELETE_PLAN=1 ;;
       z)
-        REQUEST_ZFS_COMPARE=1 ;;
+        USE_ZDIFF=1 ;;
       # Bench has no short option
       # SKIP_PLAN short form not bound to a single-letter short flag (use --skip-plan)
       c)
          COMPARE=1 ;;
       h) help ;;
       :) echo "argument missing" ;;
-      \?) echo "Something is wrong" ;;
+      \?) help_error_response "-$OPTARG" ;;
     esac
   done
 
@@ -368,28 +419,28 @@ function parse_arguments() {
   # delete/destroy by setting the top-level variables to 0, ignore CLI
   # requests. This makes the top-level setting a hard switch that must be
   # edited in the file to enable destructive behavior.
-  if [[ "${SFF_DELETE_PLAN_ALLOWED:-1}" -eq 0 ]]; then
+  if [[ "${ALLOW_CREATE_DELETE_PLAN:-1}" -eq 0 ]]; then
     if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
       echo -e "${YELLOW}Note: --clean-snapshots ignored because destroy-plan generation is disabled in configuration.${NC}"
     fi
-    SFF_DELETE_PLAN=0
+    CREATE_DELETE_PLAN=0
   else
     if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
-      SFF_DELETE_PLAN=1
+      CREATE_DELETE_PLAN=1
     fi
   fi
 
-  if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
-    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+  if [[ "${ALLOW_DESTROY_SNAPS:-1}" -eq 0 ]]; then
+    if [[ "${REQUEST_ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
       # Defer printing the yellow notice until destroy-plan/apply output so it
       # appears near the destroy messages (callers should invoke
-      # `print_destroy_disabled_notice` before printing destroy lines).
-      DESTROY_DISABLED_NOTICE=1
+      # `print_NOTIFY_DESTROY_IS_DISABLED` before printing destroy lines).
+      NOTIFY_DESTROY_IS_DISABLED=1
     fi
-    DESTROY_SNAPSHOTS=0
+    ALLOW_DESTROY_SNAPS=0
   else
-    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
-      DESTROY_SNAPSHOTS=1
+    if [[ "${REQUEST_ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
+      ALLOW_DESTROY_SNAPS=1
     fi
   fi
 
@@ -400,7 +451,7 @@ function parse_arguments() {
   fi
 
   # Warn the user if neither -f nor -s is provided
-  if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAPREGEX ]]; then
+  if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAP_SEARCH_REGEX ]]; then
     echo -e "${YELLOW}No file pattern (-f) or snapshot regex (-s) specified. Defaulting to search for all files (*).${NC}"
   fi
 
@@ -408,7 +459,7 @@ function parse_arguments() {
   # sourced modules can see these variables were intentionally read/declared.
   # These no-op references do not change values but prevent SC2034 warnings
   # about intentionally-declared global flags.
-  : "${SFF_DESTROY_FORCE:-${SFF_DESTROY_FORCE}}" "${BENCH:-${BENCH}}" "${SKIP_PLAN:-${SKIP_PLAN}}" "${QUIET:-${QUIET}}" "${OTHERFILE:-${OTHERFILE}}" "${REQUEST_ZFS_COMPARE:-${REQUEST_ZFS_COMPARE}}"
+  : "${ENABLE_ZFS_DESTROY_FORCE:-${ENABLE_ZFS_DESTROY_FORCE}}" "${BENCH:-${BENCH}}" "${SKIP_PLAN:-${SKIP_PLAN}}" "${QUIET:-${QUIET}}" "${OTHERFILE:-${OTHERFILE}}" "${USE_ZDIFF:-${USE_ZDIFF}}"
 }
 
 function initialize_search_parameters() {
@@ -428,7 +479,7 @@ function _isp_debug_print() {
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Initializing search parameters...${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Dataset path: $DATASETPATH_FS${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}File pattern: $FILENAME${NC}"
-  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Snapshot regex: $SNAPREGEX${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Snapshot regex: $SNAP_SEARCH_REGEX${NC}"
   [[ $VERBOSE == 1 ]] && echo -e "${GREY}Recursive flag: $RECURSIVE${NC}"
 }
 
@@ -443,156 +494,155 @@ function _isp_finalize() {
   _compute_trailing_wildcard_counts
 }
 
-  #!/bin/bash
-  # Dataset discovery and normalization helpers (moved back from lib/datasets.sh)
-  #
-  # This logic was previously extracted for Phase 2; per project preference we
-  # keep operation-level helpers consolidated. Preserving original comments.
-  ## Discover datasets based on recursive flag, by iterating zfs list results
-  ## and normalizing/deduping entries into the global `DATASETS` array.
-  function discover_datasets() {
-    local datasetpath="$1"
-    local recursive_flag="$2"
+# Dataset discovery and normalization helpers
+# keeping operation-level helpers consolidated.
 
-    # Ensure globbing is enabled for 'zfs list' command that populates DATASETS
-    # (it should be by default, but explicitly setting +f here if it was turned off globally)
-    set +f
+# Discover datasets based on recursive flag, by iterating zfs list results
+#  and normalizing/deduping entries into the global `DATASETS` array.
+function discover_datasets() {
+  local datasetpath="$1"
+  local recursive_flag="$2"
 
-    # Explicitly clear the DATASETS array before populating it
-    DATASETS=()
+  # Ensure globbing is enabled for 'zfs list' command that populates DATASETS
+  # (it should be by default, but explicitly setting +f here if it was turned off globally)
+  set +f
 
-    # Use a temporary array for robust population, then assign to global DATASETS
-    local -a tmp_datasets
+  # Explicitly clear the DATASETS array before populating it
+  DATASETS=()
 
-    if [[ $recursive_flag == 1 ]]; then
-      # Use mapfile for Bash 4.2 compatibility and to safely read lines into an array
-      mapfile -t tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null | tail -n +2)
-    else
-      # Include only the specified dataset
-      mapfile -t tmp_datasets < <(zfs list -H -o name "${datasetpath%/}" 2>/dev/null)
+  # Use a temporary array for robust population, then assign to global DATASETS
+  local -a tmp_datasets
+
+  if [[ $recursive_flag == 1 ]]; then
+    # Use mapfile for Bash 4.2 compatibility and to safely read lines into an array
+    mapfile -t tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null | tail -n +2)
+  else
+    # Include only the specified dataset
+    mapfile -t tmp_datasets < <(zfs list -H -o name "${datasetpath%/}" 2>/dev/null)
+  fi
+
+  # Assign the temporary array content to the global DATASETS array
+  DATASETS=("${tmp_datasets[@]}")
+
+  # Normalize and dedupe DATASETS entries to their ZFS-name form (no leading slash).
+  local -a _norm
+  for ds in "${DATASETS[@]}"; do
+    local ds_norm="${ds#/}"
+    ds_norm="${ds_norm%/}"
+    if [[ ! " ${_norm[*]} " =~ ${ds_norm} ]]; then
+      _norm+=("${ds_norm}")
     fi
+  done
 
-    # Assign the temporary array content to the global DATASETS array
-    DATASETS=("${tmp_datasets[@]}")
+  # Ensure the specified dataset is included, even if it is a parent dataset
+  # This ensures that the parent dataset is processed even without the -r flag
+  local spec="${datasetpath%/}"
+  spec="${spec#/}"
+  if [[ ! " ${_norm[*]} " =~ ${spec} ]]; then
+    _norm+=("${spec}")
+  fi
 
-    # Normalize and dedupe DATASETS entries to their ZFS-name form (no leading slash).
-    local -a _norm
+  DATASETS=("${_norm[@]}")
+
+  # Debugging output for discovered datasets (display with leading slashes)
+  if [[ $VERBOSE == 1 ]]; then
+    local -a ds_disp
     for ds in "${DATASETS[@]}"; do
-      local ds_norm="${ds#/}"
-      ds_norm="${ds_norm%/}"
-      if [[ ! " ${_norm[*]} " =~ ${ds_norm} ]]; then
-        _norm+=("${ds_norm}")
-      fi
+      ds_disp+=("/${ds#/}")
     done
+    echo -e "Discovered datasets: ${WHITE}${ds_disp[*]}${NC}"
+  fi
 
-    # Ensure the specified dataset is included, even if it is a parent dataset
-    # This ensures that the parent dataset is processed even without the -r flag
-    local spec="${datasetpath%/}"
-    spec="${spec#/}"
-    if [[ ! " ${_norm[*]} " =~ ${spec} ]]; then
-      _norm+=("${spec}")
-    fi
+  # Restore disabled globbing
+  set -f
+}
 
-    DATASETS=("${_norm[@]}")
+## Normalize a dataset string to ZFS-name form (no leading/trailing slash)
+function normalize_dataset_name() {
+  local ds="$1"
+  ds="${ds%/}"
+  ds="${ds#/}"
+  printf '%s' "$ds"
+}
 
-    # Debugging output for discovered datasets (display with leading slashes)
-    if [[ $VERBOSE == 1 ]]; then
-      local -a ds_disp
-      for ds in "${DATASETS[@]}"; do
-        ds_disp+=("/${ds#/}")
-      done
-      echo -e "Discovered datasets: ${WHITE}${ds_disp[*]}${NC}"
-    fi
+# Map a full snapshot file path to the live dataset equivalent path.
+# Args:
+#  $1 - ZFS dataset name (no leading slash), e.g. pool/dataset
+#  $2 - snapshot root path (the directory that contains .zfs/snapshot/<snap>), e.g. /pool/dataset/.zfs/snapshot/<snap>
+#  $3 - full file path inside the snapshot, e.g. /pool/dataset/.zfs/snapshot/<snap>/path/to/file
+# Output: prints the live-equivalent path, e.g. /pool/dataset/path/to/file
+function map_snapshot_to_live_path() {
+  local dataset_name="$1"
+  local snap_root="$2"
+  local full_path="$3"
 
-    # Restore disabled globbing
-    set -f
-  }
-  ## Normalize a dataset string to ZFS-name form (no leading/trailing slash)
-  function normalize_dataset_name() {
-    local ds="$1"
-    ds="${ds%/}"
-    ds="${ds#/}"
-    printf '%s' "$ds"
-  }
+  # Ensure dataset_name is normalized (no leading slash)
+  dataset_name="${dataset_name#/}"
 
-  # Map a full snapshot file path to the live dataset equivalent path.
-  # Args:
-  #  $1 - ZFS dataset name (no leading slash), e.g. pool/dataset
-  #  $2 - snapshot root path (the directory that contains .zfs/snapshot/<snap>), e.g. /pool/dataset/.zfs/snapshot/<snap>
-  #  $3 - full file path inside the snapshot, e.g. /pool/dataset/.zfs/snapshot/<snap>/path/to/file
-  # Output: prints the live-equivalent path, e.g. /pool/dataset/path/to/file
-  function map_snapshot_to_live_path() {
-    local dataset_name="$1"
-    local snap_root="$2"
-    local full_path="$3"
+  # Filesystem root for the dataset
+  local fs_root="/${dataset_name%/}"
 
-    # Ensure dataset_name is normalized (no leading slash)
-    dataset_name="${dataset_name#/}"
+  # Ensure snap_root ends with a slash for prefix removal
+  local snap_prefix="${snap_root%/}/"
 
-    # Filesystem root for the dataset
-    local fs_root="/${dataset_name%/}"
+  # Compute the path relative to the snapshot root
+  local rel_path="${full_path#${snap_prefix}}"
 
-    # Ensure snap_root ends with a slash for prefix removal
-    local snap_prefix="${snap_root%/}/"
+  # Construct live-equivalent path
+  printf '%s' "${fs_root%/}/${rel_path}"
+}
 
-    # Compute the path relative to the snapshot root
-    local rel_path="${full_path#${snap_prefix}}"
+# File pattern builder
+# Builds global `FILESTR` from `-f` args.
+# builds global `FILESTR` used by the `find` commands
+# across the codebase.
+function build_file_pattern() {
+  local splitArr
 
-    # Construct live-equivalent path
-    printf '%s' "${fs_root%/}/${rel_path}"
-  }
-
-  # File pattern builder
-  # Builds global `FILESTR` from `-f` args.
-  # builds global `FILESTR` used by the `find` commands
-  # across the codebase.
-  function build_file_pattern() {
-    local splitArr
-
-    # Split the FILENAME param, which may come in as a space separated argument
-    #  value, that will be split into an array for passing to find command using
-    #  -o -name for each addition, but not the first
-    # If the user supplied -f multiple times, use those entries as patterns.  
-    if [[ ${#FILENAME_ARR[@]} -gt 0 ]]; then
-      splitArr=("${FILENAME_ARR[@]}")
-    else
-      # Backwards compatibility: split the single FILENAME string if no -f array provided
-      read -r -a splitArr <<<"$FILENAME"
-    fi
-    # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)    FILESTR=""
-    FILEARR=()
-    for i in "${!splitArr[@]}"; do
-      local pat="${splitArr[$i]}"
-      # If the pattern includes a path separator, match by -path so users can
-      # target files inside specific subdirectories (e.g. users/brian/Documents)
-      if [[ "$pat" == *"/"* ]]; then
-        # Trim any leading slash for consistent relative matching from snapshot root
-        local pat_trim="${pat#/}"
-        # If the user didn't include any wildcard, wrap with '*' so it matches
-        # anywhere under the snapshot directory
-        if [[ "$pat_trim" == *"*"* ]]; then
-          local path_expr="*$pat_trim"
-        else
-          local path_expr="*$pat_trim*"
-        fi
-        if [[ "$i" -eq 0 ]]; then
-          FILEARR+=(-path "$path_expr")
-          FILESTR="-path $path_expr"
-        else
-          FILEARR+=(-o -path "$path_expr")
-          FILESTR+=" -o -path $path_expr"
-        fi
+  # Split the FILENAME param, which may come in as a space separated argument
+  #  value, that will be split into an array for passing to find command using
+  #  -o -name for each addition, but not the first
+  # If the user supplied -f multiple times, use those entries as patterns.  
+  if [[ ${#FILENAME_ARR[@]} -gt 0 ]]; then
+    splitArr=("${FILENAME_ARR[@]}")
+  else
+    # Backwards compatibility: split the single FILENAME string if no -f array provided
+    read -r -a splitArr <<<"$FILENAME"
+  fi
+  # iterate -f files to build the proper find command for them (appends -o -name for each addtnl)    FILESTR=""
+  FILEARR=()
+  for i in "${!splitArr[@]}"; do
+    local pat="${splitArr[$i]}"
+    # If the pattern includes a path separator, match by -path so users can
+    # target files inside specific subdirectories (e.g. users/brian/Documents)
+    if [[ "$pat" == *"/"* ]]; then
+      # Trim any leading slash for consistent relative matching from snapshot root
+      local pat_trim="${pat#/}"
+      # If the user didn't include any wildcard, wrap with '*' so it matches
+      # anywhere under the snapshot directory
+      if [[ "$pat_trim" == *"*"* ]]; then
+        local path_expr="*$pat_trim"
       else
-        if [[ "$i" -eq 0 ]]; then
-          FILEARR+=(-name "$pat")
-          FILESTR="-name $pat"
-        else
-          FILEARR+=(-o -name "$pat")
-          FILESTR+=" -o -name $pat"
-        fi
+        local path_expr="*$pat_trim*"
       fi
-    done
-  }
+      if [[ "$i" -eq 0 ]]; then
+        FILEARR+=(-path "$path_expr")
+        FILESTR="-path $path_expr"
+      else
+        FILEARR+=(-o -path "$path_expr")
+        FILESTR+=" -o -path $path_expr"
+      fi
+    else
+      if [[ "$i" -eq 0 ]]; then
+        FILEARR+=(-name "$pat")
+        FILESTR="-name $pat"
+      else
+        FILEARR+=(-o -name "$pat")
+        FILESTR+=" -o -name $pat"
+      fi
+    fi
+  done
+}
 
 # Helpers to split initialize_search_parameters for Phase 2
 # Normalize dataset filesystem path with leading slash for later filesystem operations
@@ -621,16 +671,16 @@ function _compute_trailing_wildcard_counts() {
   set -f
   DSP_CONSTITUENTS_ARR=() # Explicitly initialize as empty array
   DSP_CONSTITUENTS_ARR=($(echo "$DATASETPATH" | tr '/' '\n'))
-  DSP_CONSTITUENTS_ARR_CNT=${#DSP_CONSTITUENTS_ARR[@]}
+  DATASET_SEGMNTS=${#DSP_CONSTITUENTS_ARR[@]}
   # count how many trailing asterisks
   # walk array backwards, using c style
   for (( idx=${#DSP_CONSTITUENTS_ARR[@]}-1; idx>=0; idx-- ));  do
     VAL=${DSP_CONSTITUENTS_ARR[$idx]}
     # get id of the last dir before the trailing wildcards (-1 is because it stops
     #   on the dir after the last specified folder, subtract that also)
-    TRAILING_WILDCARD_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - idx - 1 ))
+    DATASET_SEGMNT_WLDCRDS=$(( DATASET_SEGMNTS - idx - 1 ))
     # shellcheck disable=SC2034
-    BASE_DSP_CNT=$(( DSP_CONSTITUENTS_ARR_CNT - TRAILING_WILDCARD_CNT ))
+    BASE_DSP_CNT=$(( DATASET_SEGMNTS - DATASET_SEGMNT_WLDCRDS ))
     # stop on last specified folder (first since we're reverse sorted array)
     [[ $VAL != "*" ]] && break
   done

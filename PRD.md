@@ -92,11 +92,11 @@ Recent runtime fixes applied (not part of Phase 2 refactor):
 
 Compare mode behavior note:
 - When `-c` (compare) is used, the tool now enables recursive dataset discovery implicitly (equivalent to `-r`) and prints a one-line warning. This ensures compare inspects child datasets so it reports snapshot-only files accurately for dataloss checks.
-- Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `IGNORE_REGEX_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
+- Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `REGEX_IGNORE_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
 
 Destroy safety recommendations (Phase 2 - before enabling automated destruction):
--- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh` and requires an interactive confirmation.
-- Use a permanent top-level configuration guard for execution: require the master switch `DESTROY_SNAPSHOTS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
+-- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh` and requires an interactive confirmation.
+- Use a permanent top-level configuration guard for execution: require the master switch `ALLOW_DESTROY_SNAPS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
 - Preserve an interactive confirmation step before executing any plan. Also generate and persist a human-readable pre-destroy report for review.
 
 Phase 2 — Implemented scaffolding (partial)
@@ -104,9 +104,9 @@ Phase 2 — Implemented scaffolding (partial)
 
 Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
 
- - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `SFF_DELETE_PLAN` and actual execution is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
+ - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `CREATE_DELETE_PLAN` and actual execution is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
 - Implemented generation of an executable destroy plan file (`/tmp/destroy-plan-<timestamp>.sh`) while continuing to display `WOULD delete` and commented `# /sbin/zfs destroy "<snap>"` lines in CLI output for review.
-- Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `DESTROY_SNAPSHOTS=1`.
+- Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `ALLOW_DESTROY_SNAPS=1`.
 - Split several long functions and moved shared helpers into `lib/common.sh` (e.g., `record_found_file`, `prompt_confirm`) to improve readability and reuse. Notable refactors:
   - `process_snapshots_for_dataset()` partially split into compare/non-compare handlers in `lib/zfs-search.sh` and now prints per-dataset totals in non-compare runs.
   - `identify_and_suggest_deletion_candidates()` was split into helper collectors and evaluator/planner in `lib/zfs-cleanup.sh` (plan generation and gated execution).
@@ -120,7 +120,7 @@ Summary of additions implemented to support a faster, safer compare/cleanup work
 
 - New opt-in fast-path: a `-z` / `--zfs-diff` flag that, when present, causes compare and cleanup flows to prefer `zfs diff` via the `sff_zfs_diff` wrapper instead of the legacy `find`-based enumeration. This is non-breaking: absence of `-z` preserves existing behaviour.
 - `sff_run` and `sff_zfs_diff` command wrappers added to centralize command logging, normalize zfs invocation quirks (leading slash, ordering), retry on known zfs errors, and log outputs to the per-run `commands.log`.
-- Deterministic per-run artifacts: moved persistent artifacts into a per-run directory `LOG_DIR_ROOT=/tmp/sff/<SHORT_TS>/` and replaced randomized `mktemp` filenames for persistent outputs (comparison.out, comparison-delta.out, comparison-summary.csv, acc_deleted files, destroy-plan files) so they are easy to find and reproduce per run.
+- Deterministic per-run artifacts: moved persistent artifacts into a per-run directory `LOG_DIR_ROOT=/tmp/sff/<SHORT_TIMESTAMP>/` and replaced randomized `mktemp` filenames for persistent outputs (comparison.out, comparison-delta.out, comparison-summary.csv, acc_deleted files, destroy-plan files) so they are easy to find and reproduce per run.
 - Evidence aggregation & defensive vetting: the cleanup planner now aggregates `acc_deleted` evidence from canonical locations and any `sff_acc_deleted*` files found in the plan/tmp base and removes any proposed destroys touching snapshots referenced by that evidence. Added dataset-level protection: if any snapshot in a dataset is sacred, protect the whole dataset from deletion proposals.
 - Enhanced destroy-plan output: generated plans remain comment-first but now include multi-line `# BECAUSE:` and `# DETAIL:` blocks explaining why a snapshot was chosen, and `# Command:` lines showing the exact `zfs destroy` invocation for operator review.
 - Tests & helpers updated: tests and validation scripts updated to search for the new per-run summary file patterns; helper scripts for function-length counting were added.
@@ -139,7 +139,7 @@ Files changed (high-level):
 Next steps for Phase 3.1:
 - Finish wiring the `-z` flag into the compare flow to call the new zfs-fast-compare implementation and add per-dataset fallback to `find` when `zfs` is unavailable or returns errors.
 - Add smoke tests that verify both `-z` (zfs-diff fast path) and legacy `-c` (find-based) produce identical summary CSV outputs for canonical fixtures.
-- Sweep codebase for any remaining `${SHORT_TS}_`-prefixed filename occurrences and ensure all persistent artifacts land under the per-run `LOG_DIR`.
+- Sweep codebase for any remaining `${SHORT_TIMESTAMP}_`-prefixed filename occurrences and ensure all persistent artifacts land under the per-run `LOG_DIR`.
 
 These updates reflect work applied on 2026-01-24 to harden safety, make artifacts deterministic per run, and add the safe, opt-in zfs-diff fast path toggle. Implementing the full zfs-fast-compare function and per-dataset fallback will be completed as the next implementation step.
 
@@ -161,7 +161,7 @@ Planned work items (implementation plan)
 2. Implement `zfs_fast_search()`:
   - For each snapshot pair in a dataset, call `sff_zfs_diff` to capture `+`/`-`/`M`/`R` lines.
   - Produce the same canonical artifacts and CSV summaries the cleanup and compare flows expect.
-  - Keep `IGNORE_REGEX_PATTERNS` semantics identical to legacy behavior.
+  - Keep `REGEX_IGNORE_PATTERNS` semantics identical to legacy behavior.
 3. Wire: make the non-compare `search` flow optionally prefer `zfs` when `-z`/`--zfs-diff` is present; keep legacy `find` as default.
 4. Fallbacks & logging: log per-dataset fallbacks to `${LOG_DIR}/${SFF_TMP_PREFIX}commands.log` and ensure the fallback calls the legacy code with `SKIP_ZFS_FAST=1` to avoid recursion.
 5. Testing: add smoke parity tests (similar to `tests/smoke_parity_zfs_vs_find.sh`) and add a `--test-mode` fixture harness later to run deterministic comparisons without a live ZFS pool.
@@ -170,7 +170,7 @@ Planned work items (implementation plan)
 Estimated effort: small-to-moderate; can be implemented in one PR with focused tests and docs.
 
 Notes and constraints
-- Preserve the safety-first deletion model: do not change plan/master-guard behavior (`SFF_DELETE_PLAN` / `DESTROY_SNAPSHOTS`).
+- Preserve the safety-first deletion model: do not change plan/master-guard behavior (`CREATE_DELETE_PLAN` / `ALLOW_DESTROY_SNAPS`).
 - Maintain the canonical artifact formats so cleanup and vetting code remain unchanged or only require minimal adapters.
 - Add per-dataset fallbacks rather than an all-or-nothing toggle to avoid surprising operators when `zfs` behaves inconsistently for certain snapshots.
 ---
@@ -190,7 +190,7 @@ Principal Product Requirements
 - Tracing and debugging: support `-v`, `-vv` for verbose and very-verbose tracing; `vlog()` must auto-prefix caller metadata and route tracing to stderr so machine outputs remain clean.
 - Quiet mode: `-q` suppresses per-file lines while keeping summary and logs.
 - Machine outputs sanitized: CSV and canonical artifacts must be free of ANSI/human traces; human/ANSI traces must be sent to stderr only.
-- Config guards: `DESTROY_SNAPSHOTS` must remain `0` by default in `lib/common.sh`; enabling requires editing that file (master guard). `REQUEST_DESTROY_SNAPSHOTS` may be set for prompting but cannot override the master guard.
+- Config guards: `ALLOW_DESTROY_SNAPS` must remain `0` by default in `lib/common.sh`; enabling requires editing that file (master guard). `REQUEST_ALLOW_DESTROY_SNAPS` may be set for prompting but cannot override the master guard.
 - Maintainability: prefer functions <= ~60 lines; schedule a function-length audit and refactors where needed.
 - Preserve original author comments and help text in code and docs.
 
@@ -201,10 +201,10 @@ Principal Product Requirements
 Key implementation summary
 - The comparison step writes canonical evidence files into the run tmp base with the `SFF_TMP_PREFIX` naming convention: `sff_acc_deleted-<ts>.csv` (rows: `snapshot|path`) and `sff_snap_holding-<ts>.txt` (snapshot ids).
 - The cleanup evaluator now consults a provided `acc_deleted` file and any `sff_acc_deleted*` files found in the plan/tmp base before proposing snapshot deletions.
-- Destroy plans remain plan-first: generated plans include comment-prefixed `# BECAUSE:` reasons and `# Command:` lines that show the `zfs destroy` invocation. Actual execution requires editing `DESTROY_SNAPSHOTS=1` in `lib/common.sh` and confirming runtime prompts (if `REQUEST_DESTROY_SNAPSHOTS` is set).
+- Destroy plans remain plan-first: generated plans include comment-prefixed `# BECAUSE:` reasons and `# Command:` lines that show the `zfs destroy` invocation. Actual execution requires editing `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` and confirming runtime prompts (if `REQUEST_ALLOW_DESTROY_SNAPS` is set).
 
 Safety checklist (must be satisfied before any destructive rollout)
-- Master guard: `DESTROY_SNAPSHOTS` in `lib/common.sh` must remain `0` by default. Enabling requires explicit edit and peer review.
+- Master guard: `ALLOW_DESTROY_SNAPS` in `lib/common.sh` must remain `0` by default. Enabling requires explicit edit and peer review.
 - Evidence files: any run that proposes deletions must include `sff_acc_deleted-<ts>.csv` and `sff_snap_holding-<ts>.txt` in the same tmp/log directory. Verify their contents before acting.
 - Machine outputs: CSV artifacts (`comparison-summary-*.csv`, `sff_acc_deleted-*.csv`) must be free of ANSI/human traces; the code strips ANSI before writing these files.
 - Reviewable plans: generated destroy plans must be comment-first, include BECAUSE/Command blocks, and be reviewed by an operator before enabling execution.
@@ -231,7 +231,7 @@ or call `identify_and_suggest_deletion_candidates` and confirm the tool prints t
 4. Inspect generated plan (`sff_destroy-plan-<ts>.sh`) to ensure each candidate has a `# BECAUSE:` rationale and a commented `# Command:` line.
 
 Operational notes
-- To test interactive apply without permanently enabling the master guard, set `REQUEST_DESTROY_SNAPSHOTS=1` in the environment. The tool will prompt but will still not execute unless `DESTROY_SNAPSHOTS=1` is set in `lib/common.sh`.
+- To test interactive apply without permanently enabling the master guard, set `REQUEST_ALLOW_DESTROY_SNAPS=1` in the environment. The tool will prompt but will still not execute unless `ALLOW_DESTROY_SNAPS=1` is set in `lib/common.sh`.
 - Logs: comparison writes `comparison-<ts>.out` and `comparison-delta-<ts>.out`; the tool performs best-effort background compression of older logs.
 
 Developer workflow (cross-platform)
@@ -346,11 +346,11 @@ Recent runtime fixes applied (not part of Phase 2 refactor):
 
 Compare mode behavior note:
 - When `-c` (compare) is used, the tool now enables recursive dataset discovery implicitly (equivalent to `-r`) and prints a one-line warning. This ensures compare inspects child datasets so it reports snapshot-only files accurately for dataloss checks.
-- Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `IGNORE_REGEX_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
+- Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `REGEX_IGNORE_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
 
 Destroy safety recommendations (Phase 2 - before enabling automated destruction):
--- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh` and requires an interactive confirmation.
-- Use a permanent top-level configuration guard for execution: require the master switch `DESTROY_SNAPSHOTS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
+-- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh` and requires an interactive confirmation.
+- Use a permanent top-level configuration guard for execution: require the master switch `ALLOW_DESTROY_SNAPS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
 - Preserve an interactive confirmation step before executing any plan. Also generate and persist a human-readable pre-destroy report for review.
 
 Phase 2 — Implemented scaffolding (partial)
@@ -358,9 +358,9 @@ Phase 2 — Implemented scaffolding (partial)
 
 Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
 
- - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `SFF_DELETE_PLAN` and actual execution is gated by the master config `DESTROY_SNAPSHOTS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
+ - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `CREATE_DELETE_PLAN` and actual execution is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
 - Implemented generation of an executable destroy plan file (`/tmp/destroy-plan-<timestamp>.sh`) while continuing to display `WOULD delete` and commented `# /sbin/zfs destroy "<snap>"` lines in CLI output for review.
-- Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `DESTROY_SNAPSHOTS=1`.
+- Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `ALLOW_DESTROY_SNAPS=1`.
 - Split several long functions and moved shared helpers into `lib/common.sh` (e.g., `record_found_file`, `prompt_confirm`) to improve readability and reuse. Notable refactors:
   - `process_snapshots_for_dataset()` partially split into compare/non-compare handlers in `lib/zfs-search.sh` and now prints per-dataset totals in non-compare runs.
   - `identify_and_suggest_deletion_candidates()` was split into helper collectors and evaluator/planner in `lib/zfs-cleanup.sh` (plan generation and gated execution).
@@ -374,7 +374,7 @@ Summary of additions implemented to support a faster, safer compare/cleanup work
 
 - New opt-in fast-path: a `-z` / `--zfs-diff` flag that, when present, causes compare and cleanup flows to prefer `zfs diff` via the `sff_zfs_diff` wrapper instead of the legacy `find`-based enumeration. This is non-breaking: absence of `-z` preserves existing behaviour.
 - `sff_run` and `sff_zfs_diff` command wrappers added to centralize command logging, normalize zfs invocation quirks (leading slash, ordering), retry on known zfs errors, and log outputs to the per-run `commands.log`.
-- Deterministic per-run artifacts: moved persistent artifacts into a per-run directory `LOG_DIR_ROOT=/tmp/sff/<SHORT_TS>/` and replaced randomized `mktemp` filenames for persistent outputs (comparison.out, comparison-delta.out, comparison-summary.csv, acc_deleted files, destroy-plan files) so they are easy to find and reproduce per run.
+- Deterministic per-run artifacts: moved persistent artifacts into a per-run directory `LOG_DIR_ROOT=/tmp/sff/<SHORT_TIMESTAMP>/` and replaced randomized `mktemp` filenames for persistent outputs (comparison.out, comparison-delta.out, comparison-summary.csv, acc_deleted files, destroy-plan files) so they are easy to find and reproduce per run.
 - Evidence aggregation & defensive vetting: the cleanup planner now aggregates `acc_deleted` evidence from canonical locations and any `sff_acc_deleted*` files found in the plan/tmp base and removes any proposed destroys touching snapshots referenced by that evidence. Added dataset-level protection: if any snapshot in a dataset is sacred, protect the whole dataset from deletion proposals.
 - Enhanced destroy-plan output: generated plans remain comment-first but now include multi-line `# BECAUSE:` and `# DETAIL:` blocks explaining why a snapshot was chosen, and `# Command:` lines showing the exact `zfs destroy` invocation for operator review.
 - Tests & helpers updated: tests and validation scripts updated to search for the new per-run summary file patterns; helper scripts for function-length counting were added.
@@ -390,7 +390,7 @@ Files changed (high-level):
 Next steps for Phase 3.1:
 - Finish wiring the `-z` flag into the compare flow to call the new zfs-fast-compare implementation and add per-dataset fallback to `find` when `zfs` is unavailable or returns errors.
 - Add smoke tests that verify both `-z` (zfs-diff fast path) and legacy `-c` (find-based) produce identical summary CSV outputs for canonical fixtures.
-- Sweep codebase for any remaining `${SHORT_TS}_`-prefixed filename occurrences and ensure all persistent artifacts land under the per-run `LOG_DIR`.
+- Sweep codebase for any remaining `${SHORT_TIMESTAMP}_`-prefixed filename occurrences and ensure all persistent artifacts land under the per-run `LOG_DIR`.
 
 These updates reflect work applied on 2026-01-24 to harden safety, make artifacts deterministic per run, and add the safe, opt-in zfs-diff fast path toggle. Implementing the full zfs-fast-compare function and per-dataset fallback will be completed as the next implementation step.
 
@@ -436,6 +436,6 @@ ADDED NEW FUNCTIONS TO ZFS-SEARCH
 
 Phase 2 Progress Update (2026-01-19)
 - **Status**: In-progress, core refactors applied. A repo-wide function-length scan shows no functions exceeding 60 lines.
-- **Completed in Phase 2:** Implemented `VVERBOSE` + `vlog()` tracing; added color constants and `SFF_TMP_PREFIX`; implemented conservative plan-first deletion scaffold gated by `DESTROY_SNAPSHOTS`; split several large functions (examples: `log_snapshot_deltas` -> `_lsd_process_dataset`; `parse_arguments` split into `_pa_*` helpers); restored many removed author comments; hardened temp-file handling.
+- **Completed in Phase 2:** Implemented `VVERBOSE` + `vlog()` tracing; added color constants and `SFF_TMP_PREFIX`; implemented conservative plan-first deletion scaffold gated by `ALLOW_DESTROY_SNAPS`; split several large functions (examples: `log_snapshot_deltas` -> `_lsd_process_dataset`; `parse_arguments` split into `_pa_*` helpers); restored many removed author comments; hardened temp-file handling.
 - **Left to do:** Finish restoring any remaining removed author comments exactly above the code they document; add fixture-driven `--test-mode` and CI (`shellcheck`) in Phase 2 before enabling any unattended destruction.
 - **Verification performed:** Ran function-length scan across `lib/*.sh` and `snapshots-find-file` — no functions >60 lines were found after recent splits. The `help()` function in `lib/common.sh` remains intentionally unchanged per project instruction.

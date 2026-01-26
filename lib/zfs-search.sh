@@ -77,7 +77,7 @@ function _should_skip_for_trailing_wildcard() {
   # Args: dataset
   # Returns 0 = keep processing, 1 = skip (return from caller)
   local dataset="$1"
-  if [[ ! -z "$TRAILING_WILDCARD_CNT" ]] && [[ "$TRAILING_WILDCARD_CNT" -gt 0 ]]; then
+  if [[ ! -z "$DATASET_SEGMNT_WLDCRDS" ]] && [[ "$DATASET_SEGMNT_WLDCRDS" -gt 0 ]]; then
     local DS_CONST_ARR
     # Split dataset components into array using IFS for Bash 4.2 compatibility
     IFS='/' read -r -a DS_CONST_ARR <<< "$dataset" || true
@@ -102,10 +102,10 @@ function _matches_snapshot_regex() {
   # Args: SNAPNAME
   local SNAPNAME="$1"
   local regex_pattern
-  if [[ "$SNAPREGEX" == "*" ]]; then
+  if [[ "$SNAP_SEARCH_REGEX" == "*" ]]; then
     regex_pattern=".*"
   else
-    regex_pattern="$(printf '%s' "$SNAPREGEX" | sed -e 's/[][\.^$*+?(){}|]/\\&/g' -e 's/\*/.*/g' -e 's/?/./g')"
+    regex_pattern="$(printf '%s' "$SNAP_SEARCH_REGEX" | sed -e 's/[][\.^$*+?(){}|]/\\&/g' -e 's/\*/.*/g' -e 's/?/./g')"
     regex_pattern=".*$regex_pattern.*"
   fi
   if [[ ! "$SNAPNAME" =~ $regex_pattern ]]; then

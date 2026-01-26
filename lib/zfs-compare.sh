@@ -118,7 +118,7 @@ function _csfld_check_path() {
   local seen_ignored_paths_tmp="$7"
 
   # Check ignore patterns first, log unique ignored entries
-  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+  for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
     if [[ "$live_equivalent_path" =~ $pattern ]]; then
       if ! grep -Fxq "$live_equivalent_path" "$seen_ignored_paths_tmp" 2>/dev/null; then
         echo "$live_equivalent_path (ignored by pattern: '$pattern')" >> "$ignored_log_file"
@@ -183,7 +183,7 @@ function _process_diff_pair() {
         rendered_type="REN"
         full_path="${path}"
         local new_path_for_check="${path##* -> }"
-        for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+        for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
           if [[ "$new_path_for_check" =~ $pattern ]]; then
             is_ignored="true"
             break
@@ -194,7 +194,7 @@ function _process_diff_pair() {
     esac
 
     if [[ "$diff_type_char" != "R" ]]; then
-      for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+      for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
         if [[ "$full_path" =~ $pattern ]]; then
           is_ignored="true"
           break
@@ -242,7 +242,7 @@ function compare_snapshot_files_to_live_dataset() {
 
   # If user requested the zfs diff fast-path, prefer it and return.
   # Allow callers to skip the fast-path by setting SKIP_ZFS_FAST=1 (used for fallbacks).
-  if [[ "${REQUEST_ZFS_COMPARE:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
+  if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
     echo "Using zfs diff fast-path for comparison" >> "$log_file"
     # User-visible notice when zdiff is requested
     echo -e "${YELLOW}Using zdiff (-z): preferring zfs diff over find for this run${NC}" >&2
@@ -443,7 +443,7 @@ function log_snapshot_deltas() {
   echo "Dataset path: $dataset_path" >> "$delta_log_file"
   echo "Ignored patterns:" >> "$delta_log_file"
 
-  for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+  for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
     echo "  - $pattern" >> "$delta_log_file"
   done
 

@@ -32,7 +32,7 @@ function _collect_unignored_deleted_snapshots() {
         local path="${line:2}"
         if [[ "$type" == "-" ]]; then
           local is_ignored="false"
-          for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+          for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
             if [[ "$path" =~ $pattern ]]; then
               is_ignored="true"; break
             fi
@@ -109,10 +109,10 @@ function identify_and_suggest_deletion_candidates() {
   _collect_unignored_deleted_snapshots "$acc_deleted_file" "$snap_holding_file" "$datasets_file"
 
   echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
-  if [[ "${SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
-    echo -e "${YELLOW}Note: Plan generation is ENABLED (SFF_DELETE_PLAN=1). To skip plan generation set SFF_DELETE_PLAN=0 in lib/common.sh.${NC}"
+  if [[ "${CREATE_DELETE_PLAN:-0}" -eq 1 ]]; then
+    echo -e "${YELLOW}Note: Plan generation is ENABLED (CREATE_DELETE_PLAN=1). To skip plan generation set CREATE_DELETE_PLAN=0 in lib/common.sh.${NC}"
   else
-    echo -e "${YELLOW}Note: Plan generation is DISABLED (SFF_DELETE_PLAN=0).${NC}"
+    echo -e "${YELLOW}Note: Plan generation is DISABLED (CREATE_DELETE_PLAN=0).${NC}"
   fi
   echo ""
   # Phase 2: evaluate candidates and build plan
@@ -153,13 +153,13 @@ function _maybe_execute_plan() {
 
   # If plan exists and user opted into apply, enforce environment guard
   if [[ -s "$destroy_cmds_tmp" ]]; then
-    if [[ "${REQUEST_DESTROY_SNAPSHOTS:-0}" -eq 1 ]]; then
+    if [[ "${REQUEST_ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
       # Ask for confirmation before executing
       if prompt_confirm "Execute destroy plan now?" "n"; then
         # Enforce top-level allow flag: if config explicitly disables destroy
         # execution, never run destroys regardless of CLI flags.
-        if [[ "${DESTROY_SNAPSHOTS_ALLOWED:-1}" -eq 0 ]]; then
-          echo -e "${YELLOW}Execution blocked: DESTROY_SNAPSHOTS is disabled in configuration. To permit execution, edit lib/common.sh and set DESTROY_SNAPSHOTS=1.${NC}"
+        if [[ "${ALLOW_DESTROY_SNAPS:-1}" -eq 0 ]]; then
+          echo -e "${YELLOW}Execution blocked: ALLOW_DESTROY_SNAPS is disabled in configuration. To permit execution, edit lib/common.sh and set ALLOW_DESTROY_SNAPS=1.${NC}"
           echo "Destroy plan written to: $plan_file"
         else
           local exec_log="$tmp_base/${SFF_TMP_PREFIX}destroy-exec-$ts.log"
@@ -173,7 +173,7 @@ function _maybe_execute_plan() {
         echo "User declined to execute destroy plan. Plan remains at: $plan_file"
       fi
     else
-      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable DESTROY_SNAPSHOTS=1 in lib/common.sh and re-run with --clean-snapshots.${NC}"
+      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh and re-run with --clean-snapshots.${NC}"
       echo "Destroy plan written to: $plan_file"
     fi
   fi
@@ -196,7 +196,7 @@ function _write_destroy_plan() {
 
   {
     echo "# ${SFF_TMP_PREFIX}destroy-plan generated: ${plan_file}"
-    echo "# To apply: set DESTROY_SNAPSHOTS=1 in lib/common.sh and uncomment or run the commands after review"
+    echo "# To apply: set ALLOW_DESTROY_SNAPS=1 in lib/common.sh and uncomment or run the commands after review"
     echo "# Generated: ${ts}"
     echo "#"
   } > "$plan_file"
@@ -217,7 +217,7 @@ function _vet_plan_against_acc_files() {
   if [[ -f "$acc_deleted_file" ]]; then
     _acc_files_all+=("$acc_deleted_file")
   fi
-  # Prefer SHORT_TS-prefixed acc_deleted files but fall back to legacy pattern
+  # Prefer SHORT_TIMESTAMP-prefixed acc_deleted files but fall back to legacy pattern
   mapfile -t _acc_glob_all < <(ls "${tmp_base}/${SFF_TMP_PREFIX}acc_deleted"* 2>/dev/null || true)
   for _f in "${_acc_glob_all[@]}"; do _acc_files_all+=("$_f"); done
   # Also include canonical locations (LOG_DIR and TMPDIR) in case compare and cleanup used different tmp bases
@@ -268,7 +268,7 @@ function _aggregate_evidence_into_sacred() {
   if [[ -f "$acc_deleted_file" ]]; then
     evidence_files+=("$acc_deleted_file")
   fi
-  # Prefer SHORT_TS-prefixed evidence files but fall back to legacy names
+  # Prefer SHORT_TIMESTAMP-prefixed evidence files but fall back to legacy names
   mapfile -t _ef1 < <(ls "${tmp_base_from_plan}/${SFF_TMP_PREFIX}acc_deleted"* 2>/dev/null || true)
   for _f in "${_ef1[@]}"; do evidence_files+=("$_f"); done
   mapfile -t _ef2 < <(ls "${LOG_DIR:-/tmp}/${SFF_TMP_PREFIX}acc_deleted"* 2>/dev/null || true)
@@ -390,7 +390,7 @@ function _evaluate_deletion_candidates_and_plan() {
             # into the plan below rather than kept in an unused variable.
             # Respect configured force flag when describing the command.
             local _cmd
-            if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then
+            if [[ "${ENABLE_ZFS_DESTROY_FORCE:-0}" -eq 1 ]]; then
               _cmd="/sbin/zfs destroy -f ${current_snap}"
             else
               _cmd="/sbin/zfs destroy ${current_snap}"

@@ -14,7 +14,7 @@ function bench_help() {
 Benchmark mode help (bench-only):
   - `--bench` runs a quick parity/telemetry check comparing legacy (find) vs zfs diff (zdiff) paths.
   - Requires `-c` (compare) to be meaningful; it is opt-in and exits after reporting timings and missing counts.
-  - Per-run artifacts are written to `LOG_DIR_ROOT/<SHORT_TS>/` when `LOG_DIR_ROOT` is provided.
+  - Per-run artifacts are written to `LOG_DIR_ROOT/<SHORT_TIMESTAMP>/` when `LOG_DIR_ROOT` is provided.
   - Example:
     LOG_DIR_ROOT=/tmp/sff_bench_$(date +%s) ./snapshots-find-file -c --bench -v -d pool/dataset -s "*" -f "*"
 BHELP
@@ -80,7 +80,7 @@ function bench_zfs_fast_compare() {
         *) continue ;;
       esac
 
-      for pattern in "${IGNORE_REGEX_PATTERNS[@]}"; do
+      for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
         if [[ "$full_path" =~ $pattern ]]; then
           is_ignored="true"
           break
@@ -143,16 +143,16 @@ function bench_sff_run() {
     local _ts
     _ts=$(date +"%Y%m%d-%H%M%S")
     TIMESTAMP="${_ts}"
-    SHORT_TS="${TIMESTAMP:4}"
-    LOG_DIR="${LOG_DIR_ROOT}/${SHORT_TS}"
+    SHORT_TIMESTAMP="${TIMESTAMP:4}"
+    LOG_DIR="${LOG_DIR_ROOT}/${SHORT_TIMESTAMP}"
     mkdir -p "$LOG_DIR" 2>/dev/null || true
     # Ensure the snapshot list tmp file is defined (falls back to LOG_DIR-based name).
     all_snapshot_files_found_tmp="${all_snapshot_files_found_tmp:-${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log}"
     # shellcheck disable=SC2034
     if [[ "$use_z" -eq 1 ]]; then
-      REQUEST_ZFS_COMPARE=1
+      USE_ZDIFF=1
     else
-      REQUEST_ZFS_COMPARE=0
+      USE_ZDIFF=0
     fi
     SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0}
     if [[ "$use_z" -eq 0 ]]; then SKIP_ZFS_FAST=1; fi

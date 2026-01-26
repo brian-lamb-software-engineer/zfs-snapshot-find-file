@@ -33,17 +33,17 @@ Flags of interest:
 
 By default the tool is conservative: it will not perform destructive actions
 unless explicitly enabled in the configuration file `lib/common.sh` (the
-permanent guard variable `DESTROY_SNAPSHOTS` must be manually enabled).
+permanent guard variable `ALLOW_DESTROY_SNAPS` must be manually enabled).
 
 ## Safety and workflow
 
 - The tool generates a destroy plan (`sff_destroy-plan-<timestamp>.sh`) and
   prints suggested removals as "WOULD delete" lines by default.
  - To execute a destroy plan you must:
-  - enable the `DESTROY_SNAPSHOTS` switch in `lib/common.sh` and
+  - enable the `ALLOW_DESTROY_SNAPS` switch in `lib/common.sh` and
   - run the generated plan script interactively after reviewing it.
 
-Note: do NOT edit `lib/common.sh` except to intentionally change the master guard variable `DESTROY_SNAPSHOTS` from `0` to `1`. This is the permanent, explicit switch that enables real destructive execution; do not modify any other variables in `lib/common.sh` to try to bypass the safety model.
+Note: do NOT edit `lib/common.sh` except to intentionally change the master guard variable `ALLOW_DESTROY_SNAPS` from `0` to `1`. This is the permanent, explicit switch that enables real destructive execution; do not modify any other variables in `lib/common.sh` to try to bypass the safety model.
 
 This design prevents accidental destructive runs from command-line flags or
 CI environment variables.
@@ -75,7 +75,7 @@ the variables to match your environment. The `.env` file is ignored by git.
 Short, one-line descriptions for each tracked file. This catalog intentionally avoids listing internal function names — use the tool's `--help` output for exact CLI flags and behavior.
 
 - `snapshots-find-file` : Main CLI entrypoint and orchestrator.
-- `lib/common.sh` : Shared utilities, logging helpers, and global configuration (including the master `DESTROY_SNAPSHOTS` guard).
+- `lib/common.sh` : Shared utilities, logging helpers, and global configuration (including the master `ALLOW_DESTROY_SNAPS` guard).
 - `lib/zfs-search.sh` : Snapshot and dataset discovery and file-list extraction logic.
 - `lib/zfs-compare.sh` : Comparison logic and summary CSV generation.
 - `lib/zfs-cleanup.sh` : Cleanup planning and destroy-plan generation (plan-only flows).
@@ -174,10 +174,10 @@ Notes:
 
 - Search (non-compare): enumerates files inside snapshots that match `-f`/`-s` and prints or logs them. It should not perform live-vs-snapshot comparisons by default.
 - Compare (`-c`): runs a live-dataset comparison and produces delta artifacts (`comparison-delta-*.out`, `sff_acc_deleted-*.csv`, `sff_snap_holding-*.txt`) used to detect files that exist only in snapshots (possible accidental deletions).
-- Cleanup / Plan generation (`--clean-snapshots`): reads comparison evidence and suggests safe snapshot deletions (plan-only by default). Plan generation is controlled by the config-level `SFF_DELETE_PLAN` (in `lib/common.sh`) — if `SFF_DELETE_PLAN=1` the cleanup flow may run during normal searches; set `SFF_DELETE_PLAN=0` to prevent plan-generation by default.
+- Cleanup / Plan generation (`--clean-snapshots`): reads comparison evidence and suggests safe snapshot deletions (plan-only by default). Plan generation is controlled by the config-level `CREATE_DELETE_PLAN` (in `lib/common.sh`) — if `CREATE_DELETE_PLAN=1` the cleanup flow may run during normal searches; set `CREATE_DELETE_PLAN=0` to prevent plan-generation by default.
 
 Notes:
-- If you only want a plain search, disable plan generation for that run by setting `SFF_DELETE_PLAN=0` in `lib/common.sh` or use the forthcoming runtime `--skip-plan` flag (will be documented when added).
+- If you only want a plain search, disable plan generation for that run by setting `CREATE_DELETE_PLAN=0` in `lib/common.sh` or use the forthcoming runtime `--skip-plan` flag (will be documented when added).
 - `-z` (zdiff) is an opt-in fast-path: the tool prefers `zfs diff` when available, but will fall back per-dataset to the legacy `find` behavior and log fallback reasons to `commands.log` in the per-run `LOG_DIR`.
 
 ## Environment forms & quiet mode
@@ -187,20 +187,20 @@ You can request interactive apply prompts via an environment variable. Two safe 
 - Inline for a single invocation (POSIX shell):
 
 ```bash
-REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
 ```
 
 - Export for the session (POSIX shell):
 
 ```bash
-export REQUEST_DESTROY_SNAPSHOTS=1
+export REQUEST_ALLOW_DESTROY_SNAPS=1
 ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
 ```
 
 - PowerShell (when invoking the script under WSL/`bash`):
 
 ```powershell
-$env:REQUEST_DESTROY_SNAPSHOTS='1'
+$env:REQUEST_ALLOW_DESTROY_SNAPS='1'
 bash ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
 ```
 
@@ -214,7 +214,7 @@ Quiet mode: use `-q` or `--quiet` to suppress per-file console output while stil
 Tips to avoid large logs filling disk:
 - Use `-q` to avoid console spam.
 - Set `LOG_DIR` to a filesystem with ample space before running (export `LOG_DIR=/mnt/big-disk`).
-- Add large backup directories to `IGNORE_REGEX_PATTERNS` in `lib/common.sh` to exclude them from scans.
+- Add large backup directories to `REGEX_IGNORE_PATTERNS` in `lib/common.sh` to exclude them from scans.
 - Rotate or compress old `/tmp/sff_*` logs (e.g., `gzip /tmp/sff_*.out`).
 
 ## Safe deletion checklist (TEST-ONLY workflow)
@@ -225,17 +225,17 @@ Follow this workflow to VERIFY the interactive prompt and review a generated des
 
 ```bash
 # in lib/common.sh
-DESTROY_SNAPSHOTS=0
+ALLOW_DESTROY_SNAPS=0
 ```
 
 2. Generate a destroy plan and trigger the execution prompt (prompt will appear, but execution will be blocked by the config):
 
 ```bash
-REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
 ```
 
 - Expected outcome: the script will prompt `Execute destroy plan now?`.
-- After confirmation, because `DESTROY_SNAPSHOTS=0`, the tool will print a message that execution is blocked and will write the plan file (e.g. `/tmp/sff_destroy-plan-<timestamp>.sh`). No `zfs destroy` commands will run.
+- After confirmation, because `ALLOW_DESTROY_SNAPS=0`, the tool will print a message that execution is blocked and will write the plan file (e.g. `/tmp/sff_destroy-plan-<timestamp>.sh`). No `zfs destroy` commands will run.
 
 3. Inspect the generated plan file before enabling execution:
 
@@ -250,17 +250,17 @@ grep "^# /sbin/zfs destroy" /tmp/sff_destroy-plan-YYYYMMDD-HHMMSS.sh
 
 5. To apply the plan only after a careful review:
 
-- Edit `lib/common.sh` and set `DESTROY_SNAPSHOTS=1` (explicit manual change required).
+- Edit `lib/common.sh` and set `ALLOW_DESTROY_SNAPS=1` (explicit manual change required).
 - Re-run the command with the same environment variable to trigger prompt and execution:
 
 ```bash
-REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
 ```
 
 - On confirmation the tool will create an executable `exec_plan` (it uncomments destroy lines) and run it. Logs will be written to `/tmp/sff_destroy-exec-<timestamp>.log`.
 
 Safety reminders:
 - Always test on a small, non-production dataset first.
-- Keep `DESTROY_SNAPSHOTS=0` until you have manually verified the plan.
+- Keep `ALLOW_DESTROY_SNAPS=0` until you have manually verified the plan.
 - Back up any critical data before enabling real deletes.
 

@@ -109,6 +109,11 @@ function identify_and_suggest_deletion_candidates() {
   _collect_unignored_deleted_snapshots "$acc_deleted_file" "$snap_holding_file" "$datasets_file"
 
   echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
+  if [[ "${SFF_DELETE_PLAN:-0}" -eq 1 ]]; then
+    echo -e "${YELLOW}Note: Plan generation is ENABLED (SFF_DELETE_PLAN=1). To skip plan generation set SFF_DELETE_PLAN=0 in lib/common.sh.${NC}"
+  else
+    echo -e "${YELLOW}Note: Plan generation is DISABLED (SFF_DELETE_PLAN=0).${NC}"
+  fi
   echo ""
   # Phase 2: evaluate candidates and build plan
   _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$acc_deleted_file" "$destroy_cmds_tmp" "$plan_file"

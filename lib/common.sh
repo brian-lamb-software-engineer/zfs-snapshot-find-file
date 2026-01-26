@@ -2,12 +2,11 @@
 # common code lives on this file, code that all the other libs use, as well as main vars
 
 # Common variables, constants, and utility functions
-FILESTR=""
+#
 # Plan-only delete flag (creates a destroy plan but does not execute it).
 # NOTE: This is a config-level setting. To generate plans set this to 1
 # or pass --clean-snapshots; editing this file is the permanent switch.
 SFF_DELETE_PLAN=1
-
 # Master destroy execution flag (must be explicitly enabled in config).
 # WARNING: This is the master switch for destructive execution. Do NOT
 # enable it via runtime flags — edit this file to set `DESTROY_SNAPSHOTS=1`.
@@ -22,18 +21,52 @@ REQUEST_DESTROY_SNAPSHOTS=${REQUEST_DESTROY_SNAPSHOTS:-0}
 # When a destroy execution was requested but the top-level master flag is disabled,
 # set this so callers can emit a yellow notice near destroy-plan/apply output.
 DESTROY_DISABLED_NOTICE=0
+# Request opt-in zfs-diff fast path (when present, prefer zfs diff over find)
+REQUEST_ZFS_COMPARE=${REQUEST_ZFS_COMPARE:-0}
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
 # Set these to 0 here to permanently disable plan/apply unless this file is edited.
 SFF_DELETE_PLAN_ALLOWED=${SFF_DELETE_PLAN}
 DESTROY_SNAPSHOTS_ALLOWED=${DESTROY_SNAPSHOTS}
+# Default log/tmp directory root for sff artifacts (per-run subdir includes SHORT_TS)
+# Allow environment override: if LOG_DIR_ROOT is already exported, keep it.
+# We place run artifacts under ${LOG_DIR_ROOT}/${SHORT_TS}/ so filenames themselves need not include the timestamp.
+LOG_DIR_ROOT="${LOG_DIR_ROOT:-/tmp/sff}"
+# Prefix for temporary files created by this tool
+SFF_TMP_PREFIX="sff_"
+# ZFS snapshot dir constant
 # shellcheck disable=SC2034
 ZFSSNAPDIR=".zfs/snapshot"
+# Default file-search pattern and arrays
 FILENAME="*"
 FILENAME_ARR=()
 FILEARR=()
-# Default log/tmp directory root for sff artifacts (per-run subdir includes SHORT_TS)
-# We place run artifacts under /tmp/sff/<SHORT_TS>/ so filenames themselves need not include the timestamp.
-LOG_DIR_ROOT=/tmp/sff
+
+# Example 1: Ignore cache directories
+# Example 2: Ignore temporary directories
+# Example 3: Ignore macOS specific files
+# Example 4: Ignore Windows specific thumbnail files
+DEFAULT_IGNORE_REGEX_PATTERNS=("^.*\\.cache/.*$" "^.*/tmp/.*$" "^.*/\\.DS_Store$" "^.*/thumbs\\.db$")
+# By default, ignore these common filesystem noise patterns. Users may override
+# `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
+# shellcheck disable=SC2034
+IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
+LOG_DIR="$LOG_DIR_ROOT/${SHORT_TS}"
+DATASETPATH=""
+SNAPREGEX=""
+RECURSIVE=0
+COMPARE=0
+VERBOSE=0
+VVERBOSE=0
+QUIET=0
+# shellcheck disable=SC2034
+OTHERFILE="" # Although not currently used in core logic, keep for completeness
+DSP_CONSTITUENTS_ARR_CNT=0
+TRAILING_WILDCARD_CNT=0
+BASE_DSP_CNT=0
+
+##
+# RUNTIME CONFIGS AND VARS THAT DONT NEED TO BE TOUCHED
+#
 # Color codes for output
 COL="\033["
 RED="${COL}0;31m"
@@ -48,40 +81,11 @@ PURPLE="${COL}0;35m"
 # shellcheck disable=SC2034
 GREEN="${COL}0;32m"
 NC="${COL}0m" # No Color
-# Prefix for temporary files created by this tool
-SFF_TMP_PREFIX="sff_"
-# Example 1: Ignore cache directories
-# Example 2: Ignore temporary directories
-# Example 3: Ignore macOS specific files
-# Example 4: Ignore Windows specific thumbnail files
-DEFAULT_IGNORE_REGEX_PATTERNS=(
-  "^.*\.cache/.*$"
-  "^.*/tmp/.*$"
-  "^.*/\.DS_Store$"
-  "^.*/thumbs\.db$"
-)
-
-# By default, ignore these common filesystem noise patterns. Users may override
-# `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
-# shellcheck disable=SC2034
-IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
+FILESTR=""
 # shellcheck disable=SC2034
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 # Short timestamp without year for compact filenames (MMDD-HHMMSS)
 SHORT_TS="${TIMESTAMP:4}"
-LOG_DIR="$LOG_DIR_ROOT/${SHORT_TS}"
-DATASETPATH=""
-SNAPREGEX=""
-RECURSIVE=0
-COMPARE=0
-VERBOSE=0
-VVERBOSE=0
-QUIET=0
-# shellcheck disable=SC2034
-OTHERFILE="" # Although not currently used in core logic, keep for completeness
-DSP_CONSTITUENTS_ARR_CNT=0
-TRAILING_WILDCARD_CNT=0
-BASE_DSP_CNT=0
 DATASETS=() # Will store the list of datasets to iterate
 
 # Ensure the per-run directory exists early so writers can use it.
@@ -104,6 +108,8 @@ USAGE:
   -d (required) <dataset-path to search through>
   -c (optional) (compare snapshot files to live dataset files to find missing ones)
      (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
+    -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
+      Use with or without `-c` or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
   -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
   -o (optional) <other-file-your-searching--for>
   -s (optional) <snapshot-name-regex-term> (will search all if not specified)
@@ -112,6 +118,7 @@ USAGE:
   --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
   -h (this help)
+  --skip-plan (optional) skip cleanup/plan generation for this run even if SFF_DELETE_PLAN=1
 
 Notes for deletion:
   - By default no destroys are executed. To generate a plan use --clean-snapshots.
@@ -160,6 +167,8 @@ Examples:
 
   # advanced: call cleanup function directly for a subset of datasets (debug)
   bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
+
+  
 
 Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/').
 HELP
@@ -272,6 +281,12 @@ function parse_arguments() {
         SFF_DESTROY_FORCE=1; shift ;;
       --very-verbose)
         VVERBOSE=1; shift ;;
+      --zfs-diff)
+        REQUEST_ZFS_COMPARE=1; shift ;;
+      --bench)
+        BENCH=1; shift ;;
+      --skip-plan)
+        SKIP_PLAN=1; shift ;;
       --*)
         echo -e "${YELLOW}Unknown option: $1${NC}"
         echo "Use --clean-snapshots, --force, --very-verbose or see help.";
@@ -284,7 +299,7 @@ function parse_arguments() {
   # restore positional args for getopts
   set -- "${new_args[@]}"
   # include 'q' and 'D' in the option string so getopts recognizes them
-  while getopts ":d:f:o:s:rvhcVqD" ARG; do
+  while getopts ":d:f:o:s:rvhcVqDz" ARG; do
     case "$ARG" in
       q)
         QUIET=1 ;;
@@ -308,6 +323,10 @@ function parse_arguments() {
          RECURSIVE=1 ;;
       D)
         REQUEST_SNAP_DELETE_PLAN=1 ;;
+      z)
+        REQUEST_ZFS_COMPARE=1 ;;
+      # Bench has no short option
+      # SKIP_PLAN short form not bound to a single-letter short flag (use --skip-plan)
       c)
          COMPARE=1 ;;
       h) help ;;
@@ -670,11 +689,20 @@ function sff_zfs_diff() {
   local tmp
   tmp="${LOG_DIR}/${SFF_TMP_PREFIX}zfs-diff.log"
 
+  # Telemetry: record start time (ns) when available
+  local start_ns end_ns dur_ms
+  start_ns=$(date +%s%N 2>/dev/null || echo 0)
+  echo "RUN: $zfs_bin diff $a $b START:$start_ns" >> "$logfile"
   "$zfs_bin" diff "$a" "$b" >"$tmp" 2>&1 || true
   local st=$?
-  echo "RUN: $zfs_bin diff $a $b" >> "$logfile"
+  end_ns=$(date +%s%N 2>/dev/null || echo 0)
+  if [[ $start_ns -ne 0 && $end_ns -ne 0 ]]; then
+    dur_ms=$(( (end_ns - start_ns) / 1000000 ))
+  else
+    dur_ms=0
+  fi
   cat "$tmp" >> "$logfile"
-  echo "EXIT:$st" >> "$logfile"
+  echo "EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
 
   if [[ $st -ne 0 ]]; then
     local out
@@ -682,24 +710,34 @@ function sff_zfs_diff() {
     if echo "$out" | grep -qi "leading slash"; then
       "$zfs_bin" diff "${a#/}" "${b#/}" >"$tmp" 2>&1
       st=$?
-      echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/}" >> "$logfile"
+      end_ns=$(date +%s%N 2>/dev/null || echo 0)
+      dur_ms=$(( (end_ns - start_ns) / 1000000 ))
+      echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/} DURATION_MS:$dur_ms" >> "$logfile"
       cat "$tmp" >> "$logfile"
-      echo "RETRY(strip) EXIT:$st" >> "$logfile"
+      echo "RETRY(strip) EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
     fi
     if [[ $st -ne 0 ]]; then
       out=$(cat "$tmp")
       if echo "$out" | grep -qi "Not an earlier snapshot"; then
         "$zfs_bin" diff "$b" "$a" >"$tmp" 2>&1
         st=$?
-        echo "RETRY(swap) RUN: $zfs_bin diff $b $a" >> "$logfile"
+        end_ns=$(date +%s%N 2>/dev/null || echo 0)
+        dur_ms=$(( (end_ns - start_ns) / 1000000 ))
+        echo "RETRY(swap) RUN: $zfs_bin diff $b $a DURATION_MS:$dur_ms" >> "$logfile"
         cat "$tmp" >> "$logfile"
-        echo "RETRY(swap) EXIT:$st" >> "$logfile"
+        echo "RETRY(swap) EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
       fi
     fi
   fi
 
   # Emit the diff output to stdout for callers to consume
   cat "$tmp"
+  # If successful, record zdiff usage marker
+  if [[ $st -eq 0 ]]; then
+    echo "ZDIFF_USED: $a $b DURATION_MS:$dur_ms" >> "$logfile"
+    # Informational on stderr for interactive runs
+    echo -e "${CYAN}zdiff: $a -> $b took ${dur_ms}ms${NC}" >&2
+  fi
   rm -f "$tmp" || true
   return $st
 }

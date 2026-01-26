@@ -29,6 +29,7 @@ Flags of interest:
 - `-c` : run compare mode (generate inventory and compare to live dataset)
 - `-v` : verbose; `-vv` enables very-verbose function-entry tracing
 - `--clean-snapshots` : generate a destroy plan (plan-only; does not apply)
+- `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
 
 By default the tool is conservative: it will not perform destructive actions
 unless explicitly enabled in the configuration file `lib/common.sh` (the
@@ -112,6 +113,18 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 ./snapshots-find-file -c -v -d pool/dataset -s "*" -f "*"
 ```
 
+- Use the `z` fast-path (zdiff) to prefer `zfs diff` for faster snapshot comparisons:
+
+```bash
+./snapshots-find-file -c -z -v -d pool/dataset -s "*" -f "*"
+```
+
+- Search using `zdiff` to accelerate snapshot-to-snapshot differences (opt-in):
+
+```bash
+./snapshots-find-file -z -v -d pool/dataset -s "*" -f "*.html"
+```
+
 - Generate a destroy plan (plan-only):
 
 ```bash
@@ -125,6 +138,47 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 ```
 
 For programmatic use, prefer the `--help` output as the authoritative reference for flags and semantics.
+
+## Benchmarking `zdiff` (bench mode)
+
+What it's for:
+
+- Validate performance and parity between the legacy `find`-based comparison and the opt-in `zfs diff` fast-path (`-z` / `--zdiff`).
+- Produces timing and missing-count comparisons so you can decide whether to adopt `zdiff` for a workload.
+- Bench mode is non-destructive and exits after reporting results.
+
+How to run (example):
+
+```bash
+# Save per-run artifacts to a persistent folder and run the benchmark
+LOG_DIR_ROOT=tests/tmp_parity_$(date +%s) ./snapshots-find-file -c --bench -v -d pool/dataset -s "*" -f "*"
+```
+
+Expected output (example):
+
+```
+Benchmark: running legacy (use_z=0) then zdiff (use_z=1) comparisons...
+Legacy (find) time: 1234ms missing:1
+ZDIFF time: 456ms missing:1
+```
+
+Notes:
+
+- Bench mode runs the legacy compare first (find) and then the `zdiff` path (zfs diff) and prints `time(ms)` and `missing` counts for each run.
+- Per-run artifacts are still written to the per-run `LOG_DIR` (set via `LOG_DIR_ROOT`): look for `comparison-summary-*.csv` (missing counts) and `sff_commands.log` which will include `ZDIFF_USED:` markers and per-diff durations when `zdiff` was used.
+- If the missing counts differ between the two runs, investigate `comparison-delta-*.out` and `comparison-summary-*.csv` in the `LOG_DIR` to find mismatches and fallback reasons.
+ - Bench implementation internals have been isolated to `lib/zfs-bench.sh` (developer-facing). The CLI and `--bench` flag remain unchanged for users.
+
+
+## Search vs Compare vs Cleanup
+
+- Search (non-compare): enumerates files inside snapshots that match `-f`/`-s` and prints or logs them. It should not perform live-vs-snapshot comparisons by default.
+- Compare (`-c`): runs a live-dataset comparison and produces delta artifacts (`comparison-delta-*.out`, `sff_acc_deleted-*.csv`, `sff_snap_holding-*.txt`) used to detect files that exist only in snapshots (possible accidental deletions).
+- Cleanup / Plan generation (`--clean-snapshots`): reads comparison evidence and suggests safe snapshot deletions (plan-only by default). Plan generation is controlled by the config-level `SFF_DELETE_PLAN` (in `lib/common.sh`) — if `SFF_DELETE_PLAN=1` the cleanup flow may run during normal searches; set `SFF_DELETE_PLAN=0` to prevent plan-generation by default.
+
+Notes:
+- If you only want a plain search, disable plan generation for that run by setting `SFF_DELETE_PLAN=0` in `lib/common.sh` or use the forthcoming runtime `--skip-plan` flag (will be documented when added).
+- `-z` (zdiff) is an opt-in fast-path: the tool prefers `zfs diff` when available, but will fall back per-dataset to the legacy `find` behavior and log fallback reasons to `commands.log` in the per-run `LOG_DIR`.
 
 ## Environment forms & quiet mode
 

@@ -239,12 +239,30 @@ function compare_snapshot_files_to_live_dataset() {
   echo "Comparison initiated on $(date)" > "$log_file"
   echo "Live dataset path: $live_dataset_path" >> "$log_file"
 
+  # If user requested the zfs diff fast-path, prefer it and return.
+  # Allow callers to skip the fast-path by setting SKIP_ZFS_FAST=1 (used for fallbacks).
+  if [[ "${REQUEST_ZFS_COMPARE:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
+    echo "Using zfs diff fast-path for comparison" >> "$log_file"
+    # User-visible notice when zdiff is requested
+    echo -e "${YELLOW}Using zdiff (-z): preferring zfs diff over find for this run${NC}" >&2
+    # Call the bench-provided fast-path implementation (kept separate from
+    # production compare helpers). The function is `bench_zfs_fast_compare`
+    # and is exported from lib/zfs-bench.sh when available.
+    bench_zfs_fast_compare "$raw_snapshot_file_list_tmp" "$live_dataset_path"
+    return 0
+  fi
+
   # Delegate work to a small prepare-and-run helper that returns counters
   read total_snapshot_entries ignored_files_count found_in_live_count missing_files_count skipped_reported_files_count < <(_csfld_prepare_and_run "$raw_snapshot_file_list_tmp" "$live_dataset_path" "$tmp_base" "$log_file" "$ignored_log_file")
 
   # Write final summary via helper
   _csfld_write_summary "$tmp_base" "$log_file" "$ignored_log_file" "$total_snapshot_entries" "$ignored_files_count" "$found_in_live_count" "$missing_files_count" "$skipped_reported_files_count"
 }
+
+# Fast zfs-based compare path (Phase 3.1)
+# Args: raw_snapshot_file_list_tmp live_dataset_path
+ # zfs_fast_compare moved to lib/zfs-bench.sh to keep bench/test code separate from
+ # the production comparison helpers in this file.
 
 function _csfld_prepare_and_run() {
   # Args: raw_snapshot_file_list_tmp live_dataset_path tmp_base log_file ignored_log_file
@@ -296,18 +314,35 @@ function _csfld_write_summary_csv() {
   local found_in_live_count="$4"
   local missing_files_count="$5"
   local skipped_reported_files_count="$6"
-  # Write a CSV summary file (defensive: strip ANSI sequences)
-  local summary_csv="$tmp_base/comparison-summary.csv"
+  # Defensive: ensure each metric is a single numeric token.
+  # If a caller mistakenly passed a multi-word string (e.g. the entire
+  # counter line), collapse to the first token and validate numeric.
+  total_snapshot_entries="${total_snapshot_entries%% *}"
+  ignored_files_count="${ignored_files_count%% *}"
+  found_in_live_count="${found_in_live_count%% *}"
+  missing_files_count="${missing_files_count%% *}"
+  skipped_reported_files_count="${skipped_reported_files_count%% *}"
+
+  # Default non-numeric or empty values to 0
+  local re='^[0-9]+$'
+  if ! [[ "$total_snapshot_entries" =~ $re ]]; then total_snapshot_entries=0; fi
+  if ! [[ "$ignored_files_count" =~ $re ]]; then ignored_files_count=0; fi
+  if ! [[ "$found_in_live_count" =~ $re ]]; then found_in_live_count=0; fi
+  if ! [[ "$missing_files_count" =~ $re ]]; then missing_files_count=0; fi
+  if ! [[ "$skipped_reported_files_count" =~ $re ]]; then skipped_reported_files_count=0; fi
+
+  # Write a CSV summary file (defensive: strip ANSI sequences). Use printf
+  # to avoid accidental word-splitting and write to a temp file then atomically
+  # move into place.
+  local summary_csv="$tmp_base/comparison-summary-$TIMESTAMP.csv"
   local tmp_csv
   tmp_csv=$(mktemp "${tmp_base}/comparison-summary-tmp.XXXXXX")
-  {
-    echo "metric,value"
-    echo "total_snapshot_entries,$total_snapshot_entries"
-    echo "ignored_entries,$ignored_files_count"
-    echo "found_in_live,$found_in_live_count"
-    echo "missing,$missing_files_count"
-    echo "skipped_duplicates,${skipped_reported_files_count:-0}"
-  } > "$tmp_csv"
+  printf '%s\n' "metric,value" \
+    "total_snapshot_entries,$total_snapshot_entries" \
+    "ignored_entries,$ignored_files_count" \
+    "found_in_live,$found_in_live_count" \
+    "missing,$missing_files_count" \
+    "skipped_duplicates,$skipped_reported_files_count" > "$tmp_csv"
 
   local ESC
   ESC=$(printf '\033')

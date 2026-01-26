@@ -129,9 +129,12 @@ Files changed (high-level):
 - `lib/common.sh` — added `LOG_DIR` per-run setup, `sff_run`, `sff_zfs_diff`, and CLI parsing for `-z`.
 - `lib/zfs-compare.sh` — added deterministic comparison artifact names and a pathway to call the zfs-diff fast path (planned); summary CSV writing unified.
 - `lib/zfs-cleanup.sh` — moved temp/persistent artifacts to per-run deterministic names; added `_prepare_cleanup_temp_files`, `_write_destroy_plan`, `_aggregate_evidence_into_sacred`, `_vet_plan_against_acc_files`, dataset-level protection, and multi-line plan detail blocks.
+ - `lib/zfs-bench.sh` — new bench/test harness containing the `bench_zfs_fast_compare`, `bench_sff_run` (CLI bench entrypoint), and `bench_help` helpers; bench/test logic was moved here to keep production compare helpers slim.
+ - `lib/zfs-compare.sh` — production compare helpers remain; fast-path caller updated to invoke `bench_zfs_fast_compare` (bench implementation lives in `lib/zfs-bench.sh`).
 - `tests/*` — updated to search for per-run `comparison-summary.csv` and added logging helpers.
 - `tools/count_funcs.*` — function-length helpers added (PowerShell and bash variants).
 - `agents/bash-expert.md` — notes and guidance added.
+ - `readme.md` — minor update noting that bench internals are isolated to `lib/zfs-bench.sh` while the CLI `--bench` flag remains unchanged.
 
 Next steps for Phase 3.1:
 - Finish wiring the `-z` flag into the compare flow to call the new zfs-fast-compare implementation and add per-dataset fallback to `find` when `zfs` is unavailable or returns errors.
@@ -139,6 +142,37 @@ Next steps for Phase 3.1:
 - Sweep codebase for any remaining `${SHORT_TS}_`-prefixed filename occurrences and ensure all persistent artifacts land under the per-run `LOG_DIR`.
 
 These updates reflect work applied on 2026-01-24 to harden safety, make artifacts deterministic per run, and add the safe, opt-in zfs-diff fast path toggle. Implementing the full zfs-fast-compare function and per-dataset fallback will be completed as the next implementation step.
+
+Phase 3.2 — ZFS Search Optimization (planned)
+--------------------------------------------
+Goal
+- Speed up non-compare (`search`) flows and snapshot-to-snapshot comparisons by selectively using `zfs diff` where it yields equivalent data faster than `find`-based snapshot enumeration.
+
+Why
+- The project already added a `zfs-diff` fast-path for compare flows (Phase 3.1). There are additional `find`-heavy code paths in the non-compare search and snapshot-to-snapshot logic that can benefit from the same approach and the existing `sff_zfs_diff` wrapper.
+
+Success criteria
+- `zfs_fast_search()` provides the same canonical artifacts as the legacy search path (`sff_acc_deleted-<ts>.csv`, `sff_snap_holding-<ts>.txt`, `comparison-summary.csv`) and writes logs into the per-run `LOG_DIR`.
+- Per-dataset fallback to legacy `find` occurs when `zfs` is unavailable or when `sff_zfs_diff` returns an error for a particular snapshot pair; fallbacks are logged to `commands.log`.
+- Smoke parity tests demonstrate identical `missing` counts between legacy `find` and new `zfs`-based search on representative fixtures.
+
+Planned work items (implementation plan)
+1. Audit: identify all call sites where `find` is used for snapshot-to-snapshot enumeration in `lib/zfs-search.sh`, `lib/zfs-compare.sh`, and any other helper that powers the non-compare search.
+2. Implement `zfs_fast_search()`:
+  - For each snapshot pair in a dataset, call `sff_zfs_diff` to capture `+`/`-`/`M`/`R` lines.
+  - Produce the same canonical artifacts and CSV summaries the cleanup and compare flows expect.
+  - Keep `IGNORE_REGEX_PATTERNS` semantics identical to legacy behavior.
+3. Wire: make the non-compare `search` flow optionally prefer `zfs` when `-z`/`--zfs-diff` is present; keep legacy `find` as default.
+4. Fallbacks & logging: log per-dataset fallbacks to `${LOG_DIR}/${SFF_TMP_PREFIX}commands.log` and ensure the fallback calls the legacy code with `SKIP_ZFS_FAST=1` to avoid recursion.
+5. Testing: add smoke parity tests (similar to `tests/smoke_parity_zfs_vs_find.sh`) and add a `--test-mode` fixture harness later to run deterministic comparisons without a live ZFS pool.
+6. Docs: update `help` text, PRD, and examples to recommend `-z` when `zfs` is available and to document known zfs-diff quirks (leading slash, ordering) and when the fallback will be used.
+
+Estimated effort: small-to-moderate; can be implemented in one PR with focused tests and docs.
+
+Notes and constraints
+- Preserve the safety-first deletion model: do not change plan/master-guard behavior (`SFF_DELETE_PLAN` / `DESTROY_SNAPSHOTS`).
+- Maintain the canonical artifact formats so cleanup and vetting code remain unchanged or only require minimal adapters.
+- Add per-dataset fallbacks rather than an all-or-nothing toggle to avoid surprising operators when `zfs` behaves inconsistently for certain snapshots.
 ---
 
 Included content from `docs/PRD.md` (mirrored so `docs/PRD.md` can be removed):

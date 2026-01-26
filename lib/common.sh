@@ -290,15 +290,18 @@ function parse_arguments() {
       --clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
-        SFF_DESTROY_FORCE=1; shift ;; # shellcheck disable=SC2034
+        # shellcheck disable=SC2034
+        SFF_DESTROY_FORCE=1; shift ;;
       --very-verbose)
         VVERBOSE=1; shift ;;
       --zfs-diff)
         REQUEST_ZFS_COMPARE=1; shift ;;
       --bench)
-        BENCH=1; shift ;; # shellcheck disable=SC2034
+        # shellcheck disable=SC2034
+        BENCH=1; shift ;;
       --skip-plan)
-        SKIP_PLAN=1; shift ;; # shellcheck disable=SC2034
+        # shellcheck disable=SC2034
+        SKIP_PLAN=1; shift ;;
       --*)
         echo -e "${YELLOW}Unknown option: $1${NC}"
         echo "Use --clean-snapshots, --force, --very-verbose or see help.";
@@ -314,7 +317,8 @@ function parse_arguments() {
   while getopts ":d:f:o:s:rvhcVqDz" ARG; do
     case "$ARG" in
       q)
-        QUIET=1 ;; # shellcheck disable=SC2034
+        # shellcheck disable=SC2034
+        QUIET=1 ;;
       v) # echo "Running -$ARG flag for verbose output"
         VERBOSE=1 ;;
       V)

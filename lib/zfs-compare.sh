@@ -3,6 +3,7 @@
 
 # Phase 2 helpers: split large compare functions into smaller responsibilities
 ## MISSING_LEGEND_PRINTED was replaced by a pre-scan; keep for backward compat if referenced
+# shellcheck disable=SC2034
 MISSING_LEGEND_PRINTED=0
 
 function _gather_live_files() {

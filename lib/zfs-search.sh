@@ -21,8 +21,10 @@ function _handle_compare_snapdir() {
 
   local full_snap_id="${dataset_name}@${SNAPNAME}"
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
-    # shellcheck disable=SC2016,SC2154
-    xargs -0 -I {} bash -c 'echo "$1${5#$2}|$3|$4"' _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+    # pass args into a sub-bash so we can reconstruct the output reliably; keep SC2154 disabled because
+    # `all_snapshot_files_found_tmp` is defined in `lib/common.sh` and exported into the shell environment.
+    # shellcheck disable=SC2154
+    xargs -0 -I {} bash -c "echo \"\$1\${5#\$2}|\$3|\$4\"" _ "${dataset}" "${snappath}" "${SNAPNAME}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
 }
 
 function _handle_noncompare_snapdir() {

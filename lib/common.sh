@@ -12,8 +12,12 @@ SFF_DELETE_PLAN=1
 # enable it via runtime flags — edit this file to set `DESTROY_SNAPSHOTS=1`.
 DESTROY_SNAPSHOTS=0
 # Deletion / destroy flags (safe defaults)
-# shellcheck disable=SC2034
 SFF_DESTROY_FORCE=0
+# shellcheck disable=SC2034
+# Intentionally not referenced in this file; used by callers/tests.
+# shellcheck disable=SC2034
+# (keeps shellcheck quiet about intentionally-unused config vars)
+
 # CLI-request tracking var for destroy (declared at top so it's visible/configurable)
 # Preserve any environment-provided request flag so callers can set it with
 # `REQUEST_DESTROY_SNAPSHOTS=1 ./snapshots-find-file ...` or `export REQUEST_DESTROY_SNAPSHOTS=1`.
@@ -23,6 +27,8 @@ REQUEST_DESTROY_SNAPSHOTS=${REQUEST_DESTROY_SNAPSHOTS:-0}
 DESTROY_DISABLED_NOTICE=0
 # Request opt-in zfs-diff fast path (when present, prefer zfs diff over find)
 REQUEST_ZFS_COMPARE=${REQUEST_ZFS_COMPARE:-0}
+# shellcheck disable=SC2034
+# `REQUEST_ZFS_COMPARE` is set/read across files; keep top-level declaration.
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
 # Set these to 0 here to permanently disable plan/apply unless this file is edited.
 SFF_DELETE_PLAN_ALLOWED=${SFF_DELETE_PLAN}
@@ -59,10 +65,16 @@ VERBOSE=0
 VVERBOSE=0
 QUIET=0
 # shellcheck disable=SC2034
+# `QUIET` is read by other modules; keep declaration to document config.
+# shellcheck disable=SC2034
 OTHERFILE="" # Although not currently used in core logic, keep for completeness
 DSP_CONSTITUENTS_ARR_CNT=0
 TRAILING_WILDCARD_CNT=0
 BASE_DSP_CNT=0
+
+# Export configuration flags so they are visible to sourced modules and to
+# silence static analysis (shellcheck) about intentionally-declared globals.
+export SFF_DESTROY_FORCE BENCH SKIP_PLAN QUIET OTHERFILE REQUEST_ZFS_COMPARE
 
 ##
 # RUNTIME CONFIGS AND VARS THAT DONT NEED TO BE TOUCHED
@@ -278,15 +290,15 @@ function parse_arguments() {
       --clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
-        SFF_DESTROY_FORCE=1; shift ;;
+        SFF_DESTROY_FORCE=1; shift ;; # shellcheck disable=SC2034 (intentionally set for later use)
       --very-verbose)
         VVERBOSE=1; shift ;;
       --zfs-diff)
         REQUEST_ZFS_COMPARE=1; shift ;;
       --bench)
-        BENCH=1; shift ;;
+        BENCH=1; shift ;; # shellcheck disable=SC2034 (bench mode flag is consumed elsewhere)
       --skip-plan)
-        SKIP_PLAN=1; shift ;;
+        SKIP_PLAN=1; shift ;; # shellcheck disable=SC2034 (runtime opt-out flag kept for callers)
       --*)
         echo -e "${YELLOW}Unknown option: $1${NC}"
         echo "Use --clean-snapshots, --force, --very-verbose or see help.";
@@ -302,7 +314,7 @@ function parse_arguments() {
   while getopts ":d:f:o:s:rvhcVqDz" ARG; do
     case "$ARG" in
       q)
-        QUIET=1 ;;
+        QUIET=1 ;; # shellcheck disable=SC2034 (declared for consumers in other modules)
       v) # echo "Running -$ARG flag for verbose output"
         VERBOSE=1 ;;
       V)
@@ -318,7 +330,7 @@ function parse_arguments() {
         FILENAME_ARR+=("${OPTARG}") ;;
       o) # echo "Running -$ARG flag which is a placeholder to pass another file to also search for"
          # echo "-$ARG arg is $OPTARG"
-         OTHERFILE=$OPTARG ;;
+        OTHERFILE=$OPTARG ;; # shellcheck disable=SC2034 (legacy placeholder kept for compatibility)
       r)
          RECURSIVE=1 ;;
       D)
@@ -712,9 +724,11 @@ function sff_zfs_diff() {
       st=$?
       end_ns=$(date +%s%N 2>/dev/null || echo 0)
       dur_ms=$(( (end_ns - start_ns) / 1000000 ))
-      echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/} DURATION_MS:$dur_ms" >> "$logfile"
-      cat "$tmp" >> "$logfile"
-      echo "RETRY(strip) EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
+      {
+        echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/} DURATION_MS:$dur_ms"
+        cat "$tmp"
+        echo "RETRY(strip) EXIT:$st DURATION_MS:$dur_ms"
+      } >> "$logfile"
     fi
     if [[ $st -ne 0 ]]; then
       out=$(cat "$tmp")
@@ -723,9 +737,11 @@ function sff_zfs_diff() {
         st=$?
         end_ns=$(date +%s%N 2>/dev/null || echo 0)
         dur_ms=$(( (end_ns - start_ns) / 1000000 ))
-        echo "RETRY(swap) RUN: $zfs_bin diff $b $a DURATION_MS:$dur_ms" >> "$logfile"
-        cat "$tmp" >> "$logfile"
-        echo "RETRY(swap) EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
+        {
+          echo "RETRY(swap) RUN: $zfs_bin diff $b $a DURATION_MS:$dur_ms"
+          cat "$tmp"
+          echo "RETRY(swap) EXIT:$st DURATION_MS:$dur_ms"
+        } >> "$logfile"
       fi
     fi
   fi

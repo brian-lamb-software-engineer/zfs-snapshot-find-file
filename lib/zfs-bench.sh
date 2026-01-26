@@ -146,7 +146,9 @@ function bench_sff_run() {
     SHORT_TS="${TIMESTAMP:4}"
     LOG_DIR="${LOG_DIR_ROOT}/${SHORT_TS}"
     mkdir -p "$LOG_DIR" 2>/dev/null || true
-    if [[ "$use_z" -eq 1 ]]; then REQUEST_ZFS_COMPARE=1; else REQUEST_ZFS_COMPARE=0; fi
+    # Ensure the snapshot list tmp file is defined (falls back to LOG_DIR-based name).
+    all_snapshot_files_found_tmp="${all_snapshot_files_found_tmp:-${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log}"
+    if [[ "$use_z" -eq 1 ]]; then REQUEST_ZFS_COMPARE=1; else REQUEST_ZFS_COMPARE=0; fi # shellcheck disable=SC2034 (bench toggles shared flag)
     SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0}
     if [[ "$use_z" -eq 0 ]]; then SKIP_ZFS_FAST=1; fi
     local start_ns end_ns dur_ms
@@ -171,8 +173,8 @@ function bench_sff_run() {
   }
 
   oldIFS=$IFS
-  IFS=',' read -r legacy_usez legacy_ms legacy_missing < <(__run_once 0 | tail -n1)
-  IFS=',' read -r zdiff_usez zdiff_ms zdiff_missing < <(__run_once 1 | tail -n1)
+  IFS=',' read -r _legacy_usez legacy_ms legacy_missing < <(__run_once 0 | tail -n1) # shellcheck disable=SC2034 (legacy use flag unused in bench summary)
+  IFS=',' read -r _zdiff_usez zdiff_ms zdiff_missing < <(__run_once 1 | tail -n1) # shellcheck disable=SC2034 (zdiff use flag unused in bench summary)
   IFS=$oldIFS
 
   if [[ -z "${legacy_missing// /}" ]]; then

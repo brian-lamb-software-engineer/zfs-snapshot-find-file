@@ -238,8 +238,12 @@ function _vet_plan_against_acc_files() {
         # Anchor the match to the paragraph header to avoid accidental removals
         local _header_re
         _header_re="^# Snapshot: ${_snap_name}$"
-        awk -v hdr="${_header_re}" 'BEGIN{RS=""; ORS="\n\n"} $0 !~ hdr{print $0}' "$plan_file" > "${plan_file}.new" && mv "${plan_file}.new" "$plan_file" || true
-        awk -v hdr="${_header_re}" 'BEGIN{RS=""; ORS="\n\n"} $0 !~ hdr{print $0}' "$destroy_cmds_tmp" > "${destroy_cmds_tmp}.new" && mv "${destroy_cmds_tmp}.new" "$destroy_cmds_tmp" || true
+        if awk -v hdr="${_header_re}" 'BEGIN{RS=""; ORS="\n\n"} $0 !~ hdr{print $0}' "$plan_file" > "${plan_file}.new"; then
+          mv "${plan_file}.new" "$plan_file"
+        fi
+        if awk -v hdr="${_header_re}" 'BEGIN{RS=""; ORS="\n\n"} $0 !~ hdr{print $0}' "$destroy_cmds_tmp" > "${destroy_cmds_tmp}.new"; then
+          mv "${destroy_cmds_tmp}.new" "$destroy_cmds_tmp"
+        fi
         echo "Defensive vetting: removed $_snap_name from plan because it appears in evidence file: $_af" >&2
         break
       fi
@@ -386,6 +390,7 @@ function _evaluate_deletion_candidates_and_plan() {
             local _reason_short="No diffs against previous snapshot and not marked sacred"
             # Build a more explicit detail block so operators can see final reasoning
             # (e.g. list compare points that had no differences).
+            # shellcheck disable=SC2034
             local _detail_msg
             _detail_msg="The following snapshots have NO DIFFERENCE\n- ${compare_from}\n- ${current_snap}"
             # Respect configured force flag when describing the command.

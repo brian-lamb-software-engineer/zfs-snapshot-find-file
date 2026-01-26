@@ -56,7 +56,7 @@ DEFAULT_IGNORE_REGEX_PATTERNS=("^.*\\.cache/.*$" "^.*/tmp/.*$" "^.*/\\.DS_Store$
 # `IGNORE_REGEX_PATTERNS` (e.g. via editing this file or exporting before running).
 # shellcheck disable=SC2034
 IGNORE_REGEX_PATTERNS=("${DEFAULT_IGNORE_REGEX_PATTERNS[@]}")
-LOG_DIR="$LOG_DIR_ROOT/${SHORT_TS}"
+LOG_DIR="${LOG_DIR_ROOT%/}${SHORT_TS:+/${SHORT_TS}}"
 DATASETPATH=""
 SNAPREGEX=""
 RECURSIVE=0

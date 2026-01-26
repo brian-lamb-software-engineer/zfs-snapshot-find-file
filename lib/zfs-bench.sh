@@ -26,9 +26,9 @@ function bench_zfs_fast_compare() {
   vlog "bench_zfs_fast_compare raw=${raw_snapshot_file_list_tmp} live=${live_dataset_path}"
 
   local tmp_base="${LOG_DIR:-${TMPDIR:-${BENCH_TMP_BASE}}}"
-  local delta_log_file="$tmp_base/comparison-delta.out"
-  local acc_deleted_file="${tmp_base}/${SFF_TMP_PREFIX}acc_deleted.csv"
-  local snap_holding_file="${tmp_base}/${SFF_TMP_PREFIX}snap_holding.txt"
+  local delta_log_file="${tmp_base%/}/comparison-delta.out"
+  local acc_deleted_file="${tmp_base%/}/${SFF_TMP_PREFIX}acc_deleted.csv"
+  local snap_holding_file="${tmp_base%/}/${SFF_TMP_PREFIX}snap_holding.txt"
 
   : > "$delta_log_file" 2>/dev/null || true
   : > "$acc_deleted_file" 2>/dev/null || true

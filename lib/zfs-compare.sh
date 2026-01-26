@@ -232,8 +232,8 @@ function compare_snapshot_files_to_live_dataset() {
   vlog "raw=${raw_snapshot_file_list_tmp} live=${live_dataset_path}"
 
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
-  local log_file="$tmp_base/comparison.out"
-  local ignored_log_file="$tmp_base/compare-ignore.out"
+  local log_file="${tmp_base%/}/comparison.out"
+  local ignored_log_file="${tmp_base%/}/compare-ignore.out"
 
   # Informational output should go to stderr so stdout remains for data.
   echo -e "${CYAN}Starting comparison, results will be logged to:${NC} ${YELLOW}$log_file${NC}" >&2
@@ -431,7 +431,7 @@ function log_snapshot_deltas() {
 
   # Ensure we write logs into configured LOG_DIR (or TMP fallback)
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
-  local delta_log_file="$tmp_base/comparison-delta.out"
+  local delta_log_file="${tmp_base%/}/comparison-delta.out"
 
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
     echo -e "${YELLOW}No datasets found for delta analysis. Skipping.${NC}"

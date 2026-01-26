@@ -334,7 +334,8 @@ function parse_arguments() {
         FILENAME_ARR+=("${OPTARG}") ;;
       o) # echo "Running -$ARG flag which is a placeholder to pass another file to also search for"
         # echo "-$ARG arg is $OPTARG"
-        OTHERFILE=$OPTARG ;; # shellcheck disable=SC2034
+        # shellcheck disable=SC2034
+        OTHERFILE=$OPTARG ;;
       r)
          RECURSIVE=1 ;;
       D)

@@ -178,8 +178,10 @@ function bench_sff_run() {
   }
 
   oldIFS=$IFS
-  IFS=',' read -r _legacy_usez legacy_ms legacy_missing < <(__run_once 0 | tail -n1) # shellcheck disable=SC2034 (legacy use flag unused in bench summary)
-  IFS=',' read -r _zdiff_usez zdiff_ms zdiff_missing < <(__run_once 1 | tail -n1) # shellcheck disable=SC2034 (zdiff use flag unused in bench summary)
+  # shellcheck disable=SC2034
+  IFS=',' read -r _legacy_usez legacy_ms legacy_missing < <(__run_once 0 | tail -n1)
+  # shellcheck disable=SC2034
+  IFS=',' read -r _zdiff_usez zdiff_ms zdiff_missing < <(__run_once 1 | tail -n1)
   IFS=$oldIFS
 
   if [[ -z "${legacy_missing// /}" ]]; then

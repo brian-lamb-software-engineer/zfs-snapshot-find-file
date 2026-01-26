@@ -191,8 +191,12 @@ function bench_sff_run() {
     fi
   fi
 
-  echo "Legacy (find) time: ${legacy_ms}ms missing:${legacy_missing}"
-  echo "ZDIFF time: ${zdiff_ms}ms missing:${zdiff_missing}"
+  # Report whether each run used the zdiff path (1) or not (0)
+  local legacy_used_str zdiff_used_str
+  if [[ "${_legacy_usez:-0}" -eq 1 ]]; then legacy_used_str="yes"; else legacy_used_str="no"; fi
+  if [[ "${_zdiff_usez:-0}" -eq 1 ]]; then zdiff_used_str="yes"; else zdiff_used_str="no"; fi
+  echo "Legacy (find) time: ${legacy_ms}ms missing:${legacy_missing} used:${legacy_used_str}"
+  echo "ZDIFF time: ${zdiff_ms}ms missing:${zdiff_missing} used:${zdiff_used_str}"
 }
 
 export -f bench_zfs_fast_compare bench_sff_run bench_help

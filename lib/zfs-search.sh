@@ -20,6 +20,9 @@ function _handle_compare_snapdir() {
   local creation_time_epoch="$5"
 
   local full_snap_id="${dataset_name}@${SNAPNAME}"
+  # Ensure shared tmp path exists or has a sensible fallback so static analysis
+  # can see the variable is intentionally available in this sourced context.
+  all_snapshot_files_found_tmp="${all_snapshot_files_found_tmp:-${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log}"
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
     # pass args into a sub-bash so we can reconstruct the output reliably; keep SC2154 disabled because
     # `all_snapshot_files_found_tmp` is defined in `lib/common.sh` and exported into the shell environment.

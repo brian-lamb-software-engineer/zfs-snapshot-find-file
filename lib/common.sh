@@ -398,6 +398,12 @@ function parse_arguments() {
   if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAPREGEX ]]; then
     echo -e "${YELLOW}No file pattern (-f) or snapshot regex (-s) specified. Defaulting to search for all files (*).${NC}"
   fi
+
+  # Touch/mention CLI-toggled flags here so static analysis and downstream
+  # sourced modules can see these variables were intentionally read/declared.
+  # These no-op references do not change values but prevent SC2034 warnings
+  # about intentionally-declared global flags.
+  : "${SFF_DESTROY_FORCE:-${SFF_DESTROY_FORCE}}" "${BENCH:-${BENCH}}" "${SKIP_PLAN:-${SKIP_PLAN}}" "${QUIET:-${QUIET}}" "${OTHERFILE:-${OTHERFILE}}" "${REQUEST_ZFS_COMPARE:-${REQUEST_ZFS_COMPARE}}"
 }
 
 function initialize_search_parameters() {

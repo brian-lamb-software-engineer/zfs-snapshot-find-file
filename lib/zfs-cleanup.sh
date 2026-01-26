@@ -346,11 +346,8 @@ function _evaluate_deletion_candidates_and_plan() {
     for i in "${!snapshots[@]}"; do
       local current_snap="${snapshots[$i]}"
       vlog "evaluating_snapshot=${current_snap}"
-      # shellcheck disable=SC2034
-      local is_deletion_candidate="true"
 
       if [[ -n "${sacred[$current_snap]}" ]]; then
-        is_deletion_candidate="false"
         [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains unignored files deleted from live."
       else
         # Extra safety: check acc_deleted_file(s) for evidence of files present
@@ -390,9 +387,8 @@ function _evaluate_deletion_candidates_and_plan() {
             local _reason_short="No diffs against previous snapshot and not marked sacred"
             # Build a more explicit detail block so operators can see final reasoning
             # (e.g. list compare points that had no differences).
-            # shellcheck disable=SC2034
-            local _detail_msg
-            _detail_msg="The following snapshots have NO DIFFERENCE\n- ${compare_from}\n- ${current_snap}"
+            # Build a small human-readable detail that is emitted directly
+            # into the plan below rather than kept in an unused variable.
             # Respect configured force flag when describing the command.
             local _cmd
             if [[ "${SFF_DESTROY_FORCE:-0}" -eq 1 ]]; then

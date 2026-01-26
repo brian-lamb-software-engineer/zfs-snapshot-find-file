@@ -367,7 +367,6 @@ function _evaluate_deletion_candidates_and_plan() {
           fi
         done
         if [[ "$_found_in_acc" -eq 1 ]]; then
-          is_deletion_candidate="false"
           [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains files removed from live (refer to acc_deleted files)."
           continue
         fi

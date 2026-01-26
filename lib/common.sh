@@ -290,15 +290,15 @@ function parse_arguments() {
       --clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --force)
-        SFF_DESTROY_FORCE=1; shift ;; # shellcheck disable=SC2034 (intentionally set for later use)
+        SFF_DESTROY_FORCE=1; shift ;; # shellcheck disable=SC2034
       --very-verbose)
         VVERBOSE=1; shift ;;
       --zfs-diff)
         REQUEST_ZFS_COMPARE=1; shift ;;
       --bench)
-        BENCH=1; shift ;; # shellcheck disable=SC2034 (bench mode flag is consumed elsewhere)
+        BENCH=1; shift ;; # shellcheck disable=SC2034
       --skip-plan)
-        SKIP_PLAN=1; shift ;; # shellcheck disable=SC2034 (runtime opt-out flag kept for callers)
+        SKIP_PLAN=1; shift ;; # shellcheck disable=SC2034
       --*)
         echo -e "${YELLOW}Unknown option: $1${NC}"
         echo "Use --clean-snapshots, --force, --very-verbose or see help.";
@@ -314,7 +314,7 @@ function parse_arguments() {
   while getopts ":d:f:o:s:rvhcVqDz" ARG; do
     case "$ARG" in
       q)
-        QUIET=1 ;; # shellcheck disable=SC2034 (declared for consumers in other modules)
+        QUIET=1 ;; # shellcheck disable=SC2034
       v) # echo "Running -$ARG flag for verbose output"
         VERBOSE=1 ;;
       V)
@@ -329,8 +329,8 @@ function parse_arguments() {
         # echo "-$ARG arg is $OPTARG"
         FILENAME_ARR+=("${OPTARG}") ;;
       o) # echo "Running -$ARG flag which is a placeholder to pass another file to also search for"
-         # echo "-$ARG arg is $OPTARG"
-        OTHERFILE=$OPTARG ;; # shellcheck disable=SC2034 (legacy placeholder kept for compatibility)
+        # echo "-$ARG arg is $OPTARG"
+        OTHERFILE=$OPTARG ;; # shellcheck disable=SC2034
       r)
          RECURSIVE=1 ;;
       D)

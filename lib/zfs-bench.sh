@@ -148,7 +148,7 @@ function bench_sff_run() {
     mkdir -p "$LOG_DIR" 2>/dev/null || true
     # Ensure the snapshot list tmp file is defined (falls back to LOG_DIR-based name).
     all_snapshot_files_found_tmp="${all_snapshot_files_found_tmp:-${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log}"
-    if [[ "$use_z" -eq 1 ]]; then REQUEST_ZFS_COMPARE=1; else REQUEST_ZFS_COMPARE=0; fi # shellcheck disable=SC2034 (bench toggles shared flag)
+    if [[ "$use_z" -eq 1 ]]; then REQUEST_ZFS_COMPARE=1; else REQUEST_ZFS_COMPARE=0; fi # shellcheck disable=SC2034
     SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0}
     if [[ "$use_z" -eq 0 ]]; then SKIP_ZFS_FAST=1; fi
     local start_ns end_ns dur_ms

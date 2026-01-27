@@ -543,35 +543,33 @@ A: You can compare snapshots pairwise (e.g., adjacent snapshots) using `zfs diff
 - Wire `sff_zfs_diff` into the pruning flow when `-z` is present; record per-dataset zdiff outputs and fallback reasons to `commands.log`.
 - Generate the destroy-plan with annotated `# BECAUSE:` and `# CHECK:` lines for every candidate.
 
-## Recommendation
-- Add this content to `PRD.md` (docs-first). After you approve the PRD changes we will:
-  1. Audit all `--clean-snapshots` occurrences and stage the deprecation rename across docs/tests.
-  2. Implement `-p` parse semantics so it implies snapshot-compare for pruning.
+## Operator approval
+-  After you approve the PRD changes we will:
+  1. Audit all `--clean-snapshots` occurrences and stage the deprecation rename across docs/tests (the Minor piece of this).
+  2. Implement `-p` parse semantics so it implies snapshot-compare for pruning. (This begins the Major part)
   3. Wire `-z` into pruning flow with per-dataset fallback and detailed logging.
   4. Add deterministic fixture-driven parity tests and operator-review output.
 
-Do you want me to merge this into `PRD.md` now (docs-only)?
-
 1) Docs-only (non-destructive)
-  - Update `PRD.md`, `readme.md`, and examples to show `--create-destroy-plan` (`-p`) as canonical; document deprecation behavior for `--clean-snapshots`.
+  - Update `PRD.md`, `readme.md`, and examples to show `--create-destroy-plan` (`-p`) as canonical.
   - Add unit/acceptance test updates that reference the new name (tests still exercise behavior unchanged).
 
 2) Opt-in integration (non-destructive)
   - Wire `-z` / `--zfs-diff` into non-compare flows so the code calls `zfs_fast_search()` / `sff_zfs_diff` when present.
   - Record per-dataset zdiff outputs under the run `LOG_DIR` and add `commands.log` entries showing zdiff invocations and fallback reasons.
-  - Implement per-dataset fallback: on zdiff failure, fall back to the existing `find` logic and record the event.
+  - Implement per-dataset fallback: on zdiff failure, fall back to the existing `find` logic and record the event, and note it to output that its in fallback mode.
 
 3) Parity verification (tests-first)
-  - Add fixture-driven smoke parity tests comparing `-z` vs. legacy `find` outputs for representative datasets.
+  - Add fixture-driven smoke parity tests comparing `-z` vs. legacy `find` outputs for representative datasets. these belong in tests/ folder, as a .sh shell script.
   - Ensure machine-readable artifacts (summary CSVs, `sff_acc_deleted-*.csv`) are identical in acceptance fixtures.
 
 4) Promote to default (after approval)
-  - If parity tests pass and operator review approves, change non-compare runs to prefer `zfs diff` by default (with `--no-zdi` opt-out).
+  - If parity tests pass and operator review approves, change non-compare runs to prefer `zfs diff` by default (with `--no-zdiff` opt-out).
   - Maintain explicit config guard and interactive checks for any destructive apply operations.
 
 Acceptance Criteria
 
-- Documentation and tests reference `--create-destroy-plan` as canonical; `--clean-snapshots` emits a deprecation warning but continues to work for one release.
+- Documentation and tests reference `--create-destroy-plan` as canonical; `--clean-snapshots` as an alias.
 - Parity smoke tests pass for representative fixtures: summary CSVs and candidate lists match between `zfs diff` and `find` flows.
 - Per-dataset fallback behavior is implemented and logged; no silent failures.
 - No change to plan-first safety model: disabling `ALLOW_DESTROY_SNAPS` remains effective.
@@ -584,9 +582,9 @@ Rollout steps & gating
 
 Risks & Mitigations
 
-- zfs-specific edge cases (encryption, very large snapshots): mitigate by per-dataset fallback to `find` and conservative timeouts/retries in `sff_zfs_diff`.
+- zfs-specific edge cases (encryption, very large snapshots): mitigate by per-dataset fallback to `find` and conservative timeouts/retries in `sff_zfs_diff` if it turns out zdiff is slower or another good reason.
 - Diverging outputs between `zfs diff` and `find`: mitigate by requiring parity fixtures and operator sign-off before promotion.
-- Performance regressions for some datasets: measure with `lib/zfs-bench.sh` and provide revert/opt-out flags.
+- Performance regressions for some datasets: measure with `lib/zfs-bench.sh` and provide revert/opt-out flags.  Skip this part for now, it can be a followup.  if we get past Phase 4, and you read this part, then ask if its time to implement/run this yet. 
 
 Developer notes
 

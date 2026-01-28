@@ -62,6 +62,8 @@ function bench_zfs_fast_compare() {
       local cmdlog="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
       mkdir -p "$(dirname "$cmdlog")" 2>/dev/null || true
       echo "FALLBACK: zfs diff failed for ${parent_compare_point} ${current_compare_point} (exit $st). Falling back to find-based compare for dataset ${dataset}." >> "$cmdlog"
+      # Inform operator that this dataset will use find due to zdiff fallback
+      echo -e "${YELLOW}Using find for dataset: ${dataset} (zdiff fallback)${NC}" >&2
       SKIP_ZFS_FAST=1 compare_snapshot_files_to_live_dataset "$raw_snapshot_file_list_tmp" "$live_dataset_path"
       rm -f "$diff_tmp" || true
       return 0

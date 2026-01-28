@@ -1,5 +1,5 @@
 #!/bin/bash
-# ZFS snapshot cleanup and deletion candidate functions
+# ZFS snapshot cleanup and snapshot-deletion-candidate functions
 #
 function _collect_unignored_deleted_snapshots() {
   # Args: temp_acc_deleted_file, temp_snap_holding_file, datasets_file
@@ -49,12 +49,17 @@ function _collect_unignored_deleted_snapshots() {
   done < "$datasets_file"
 
   if [[ "$accidentally_deleted_count" -eq 0 ]]; then
-    echo "No potentially accidentally deleted files found that are not ignored."
+    # Only print this message when the user provided an explicit file pattern
+    # (i.e., not the default '-name *'). For cleanup-only zdiff runs without
+    # an explicit -f, suppress this noisy message.
+    if [[ "${FILESTR:-}" != "-name *" ]]; then
+      echo "No potentially accidentally deleted files found that are not ignored."
+    fi
   fi
 }
 
-# Public: Identify deletion candidates and present a safe destroy plan (dry-run by default)
-function identify_and_suggest_deletion_candidates() {
+# Public: Identify snapshot deletion candidates and present a safe destroy plan (dry-run by default)
+function identify_and_suggest_snapshot_deletion_candidates() {
   local dataset_path_prefix="$1"
   shift
   local -a datasets_array=("$@")
@@ -66,12 +71,21 @@ function identify_and_suggest_deletion_candidates() {
   local tmp_base_preview="${LOG_DIR:-${TMPDIR:-/tmp}}"
   echo -e "Using temp base for cleanup: ${tmp_base_preview}" >&2
 
+  # If user requested the zfs diff fast-path for cleanup, announce it here
+  # so non-compare flows make the zdiff preference visible like compare flows do.
+  if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
+    local _cmdlog
+    _cmdlog="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
+    echo "Using zfs diff fast-path for cleanup (zdiff requested)" >> "${_cmdlog}" 2>/dev/null || true
+    echo -e "${YELLOW}Using zdiff (-z): preferring zfs diff over find for this cleanup run${NC}" >&2
+  fi
+
   if [[ ${#datasets_array[@]} -eq 0 ]]; then
-    echo -e "${YELLOW}No datasets found for deletion candidate identification. Skipping.${NC}"
+    echo -e "${YELLOW}No datasets found for snapshot-deletion-candidate identification. Skipping.${NC}"
     return
   fi
 
-  echo -e "\n${RED}--- Identifying Snapshot Deletion Candidates ---${NC}"
+  echo -e "\n${RED}--- Identifying Snapshot Deletion Candidates (snapshot deletion candidates) ---${NC}"
     echo -e "Snapshots are suggested for deletion if they do NOT contain:\n" \
       "  1. Important files that have been deleted from the live filesystem (unignored '-' diffs to live).\n" \
         "  AND\n" \
@@ -108,7 +122,7 @@ function identify_and_suggest_deletion_candidates() {
   # Phase 1: gather unignored deleted files and mark sacred snapshots
   _collect_unignored_deleted_snapshots "$acc_deleted_file" "$snap_holding_file" "$datasets_file"
 
-  echo -e "\n${RED}--- Snapshots Suggested for Deletion ---${NC}"
+  echo -e "\n${RED}--- Snapshots Suggested for Deletion (snapshot deletion candidates) ---${NC}"
   if [[ "${CREATE_DELETE_PLAN:-0}" -eq 1 ]]; then
     echo -e "${YELLOW}Note: Plan generation is ENABLED (CREATE_DELETE_PLAN=1). To skip plan generation set CREATE_DELETE_PLAN=0 in lib/common.sh.${NC}"
   else
@@ -120,6 +134,11 @@ function identify_and_suggest_deletion_candidates() {
 
   # If plan exists, handle execution and cleanup in helpers
   _maybe_execute_plan "$destroy_cmds_tmp" "$plan_file" "$tmp_base" "$TIMESTAMP"
+  # If no destroy commands were collected, emit a clear summary line so operators
+  # know there were no snapshot deletion candidates discovered during this run.
+  if [[ ! -s "$destroy_cmds_tmp" ]]; then
+    echo -e "${YELLOW}No snapshot deletion candidates found.${NC}"
+  fi
   _cleanup_cleanup_temp_files "$datasets_file" "$acc_deleted_file" "$snap_holding_file" "$destroy_cmds_tmp"
 }
 
@@ -159,7 +178,7 @@ function _maybe_execute_plan() {
         # Enforce top-level allow flag: if config explicitly disables destroy
         # execution, never run destroys regardless of CLI flags.
         if [[ "${ALLOW_DESTROY_SNAPS:-1}" -eq 0 ]]; then
-          echo -e "${YELLOW}Execution blocked: ALLOW_DESTROY_SNAPS is disabled in configuration. To permit execution, edit lib/common.sh and set ALLOW_DESTROY_SNAPS=1.${NC}"
+          echo -e "${YELLOW}Execution requested but blocked: ALLOW_DESTROY_SNAPS is disabled in configuration. To permit execution, edit lib/common.sh and set ALLOW_DESTROY_SNAPS=1.${NC}"
           echo "Destroy plan written to: $plan_file"
         else
           local exec_log="$tmp_base/${SFF_TMP_PREFIX}destroy-exec-$ts.log"
@@ -173,7 +192,7 @@ function _maybe_execute_plan() {
         echo "User declined to execute destroy plan. Plan remains at: $plan_file"
       fi
     else
-      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh and re-run with --clean-snapshots.${NC}"
+      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh and re-run with --clean-snapshots to request execution (or --create-destroy-plan to only generate a plan).${NC}"
       echo "Destroy plan written to: $plan_file"
     fi
   fi

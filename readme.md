@@ -28,7 +28,9 @@ Flags of interest:
 
 - `-c` : run compare mode (generate inventory and compare to live dataset)
 - `-v` : verbose; `-vv` enables very-verbose function-entry tracing
-- `--clean-snapshots` : generate a destroy plan (plan-only; does not apply)
+- `-v` : verbose; `-vv` enables very-verbose function-entry tracing
+-- `--create-destroy-plan` (`-p`): generate a destroy plan (plan-only; does not apply)
+-- `--clean-snapshots`: request cleanup and attempt to apply suggested snapshot deletions (respects `ALLOW_DESTROY_SNAPS` master guard in `lib/common.sh`).
 - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
 
 By default the tool is conservative: it will not perform destructive actions
@@ -128,7 +130,7 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 - Generate a destroy plan (plan-only):
 
 ```bash
-./snapshots-find-file --clean-snapshots
+./snapshots-find-file --create-destroy-plan
 ```
 
 - Very-verbose function-entry tracing:
@@ -174,7 +176,14 @@ Notes:
 
 - Search (non-compare): enumerates files inside snapshots that match `-f`/`-s` and prints or logs them. It should not perform live-vs-snapshot comparisons by default.
 - Compare (`-c`): runs a live-dataset comparison and produces delta artifacts (`comparison-delta-*.out`, `sff_acc_deleted-*.csv`, `sff_snap_holding-*.txt`) used to detect files that exist only in snapshots (possible accidental deletions).
-- Cleanup / Plan generation (`--clean-snapshots`): reads comparison evidence and suggests safe snapshot deletions (plan-only by default). Plan generation is controlled by the config-level `CREATE_DELETE_PLAN` (in `lib/common.sh`) — if `CREATE_DELETE_PLAN=1` the cleanup flow may run during normal searches; set `CREATE_DELETE_PLAN=0` to prevent plan-generation by default.
+- Cleanup / Plan generation (`--create-destroy-plan`): reads comparison evidence and suggests safe snapshot deletions (plan-only by default). Use `--clean-snapshots` to request execution of the generated plan in the same run (execution still gated by `ALLOW_DESTROY_SNAPS`). Plan generation is controlled by the config-level `CREATE_DELETE_PLAN` (in `lib/common.sh`) — if `CREATE_DELETE_PLAN=1` the cleanup flow may run during normal searches; set `CREATE_DELETE_PLAN=0` to prevent plan-generation by default.
+
+Clarifications:
+- **Missing-file evidence**: file paths produced by comparing a snapshot to the live dataset where the live dataset lacks that file (a '-' diff). Those are file-level findings used as evidence for potential accidental deletions.
+- **Snapshot deletion candidate**: a snapshot that — after checks and ignores — contains no important files/new changes and therefore can be safely suggested for deletion. The tool derives snapshot deletion candidates from missing-file evidence and from per-snapshot pair checks (zdiff).
+
+Notes:
+- The initial inventory phase historically used `find` to list files inside snapshots. The `-z` / `--zfs-diff` opt-in promotes `zfs diff` into the pruning/cleanup path and (in zdiff-only cleanup runs) avoids the expensive `find` inventory when safe. Per-dataset fallback to `find` occurs when `zfs diff` is unavailable or fails for that dataset; fallback reasons are logged and a visible banner is printed.
 
 Notes:
 - If you only want a plain search, disable plan generation for that run by setting `CREATE_DELETE_PLAN=0` in `lib/common.sh` or use the forthcoming runtime `--skip-plan` flag (will be documented when added).
@@ -187,21 +196,21 @@ You can request interactive apply prompts via an environment variable. Two safe 
 - Inline for a single invocation (POSIX shell):
 
 ```bash
-REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -cvv -d /path/to/dataset --create-destroy-plan -f "*"
 ```
 
 - Export for the session (POSIX shell):
 
 ```bash
 export REQUEST_ALLOW_DESTROY_SNAPS=1
-./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+./snapshots-find-file -cvv -d /path/to/dataset --create-destroy-plan -f "*"
 ```
 
 - PowerShell (when invoking the script under WSL/`bash`):
 
 ```powershell
 $env:REQUEST_ALLOW_DESTROY_SNAPS='1'
-bash ./snapshots-find-file -cvv -d /path/to/dataset --clean-snapshots -f "*"
+bash ./snapshots-find-file -cvv -d /path/to/dataset --create-destroy-plan -f "*"
 ```
 
 Quiet mode: use `-q` or `--quiet` to suppress per-file console output while still producing logs and the numeric summary. When quiet mode is active the tool prints a single yellow notice in the place where per-file lines would normally appear:
@@ -231,7 +240,7 @@ ALLOW_DESTROY_SNAPS=0
 2. Generate a destroy plan and trigger the execution prompt (prompt will appear, but execution will be blocked by the config):
 
 ```bash
-REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --create-destroy-plan
 ```
 
 - Expected outcome: the script will prompt `Execute destroy plan now?`.
@@ -254,7 +263,7 @@ grep "^# /sbin/zfs destroy" /tmp/sff_destroy-plan-YYYYMMDD-HHMMSS.sh
 - Re-run the command with the same environment variable to trigger prompt and execution:
 
 ```bash
-REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --clean-snapshots
+REQUEST_ALLOW_DESTROY_SNAPS=1 ./snapshots-find-file -c -d /path/to/dataset --create-destroy-plan
 ```
 
 - On confirmation the tool will create an executable `exec_plan` (it uncomments destroy lines) and run it. Logs will be written to `/tmp/sff_destroy-exec-<timestamp>.log`.

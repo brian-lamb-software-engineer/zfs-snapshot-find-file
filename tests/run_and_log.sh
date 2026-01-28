@@ -2,7 +2,7 @@
 set -euo pipefail
 LOG=new.log
 : > "$LOG"
-./snapshots-find-file -cvv -d "/nas/live/cloud/tcc" -s "*" --clean-snapshots -f "*" >> "$LOG" 2>&1 || true
+./snapshots-find-file -cvv -d "/nas/live/cloud/tcc" -s "*" --create-destroy-plan -f "*" >> "$LOG" 2>&1 || true
 summary=$(grep -oE "/tmp/.*/comparison-summary\\.csv" "$LOG" | tail -n1 || true)
 echo -e "\n--- summary_csv: ${summary:-<none>} ---" >> "$LOG"
 if [[ -n "$summary" && -f "$summary" ]]; then

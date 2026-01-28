@@ -8,7 +8,7 @@
 
 # Plan-only delete flag (creates a destroy plan but does not execute it).
 # NOTE: This is a config-level setting. To generate plans set this to 1
-# or pass --clean-snapshots
+# or pass --create-destroy-plan or --clean-snapshots
 CREATE_DELETE_PLAN=1
 # Master destroy execution flag (must be explicitly enabled in config).
 # WARNING: This is the master switch for destructive execution. Do NOT
@@ -132,6 +132,28 @@ mkdir -p "$LOG_DIR" 2>/dev/null || true
 all_snapshot_files_found_tmp="${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log"
 : > "$all_snapshot_files_found_tmp" 2>/dev/null || true
 
+# Initialize per-run commands log with a clear header so multiple runs
+# appended to the same physical logfile are easy to distinguish. We include
+# an ISO-like timestamp and a dashed separator.
+cmdlog_file="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
+# Also append to the root LOG_DIR_ROOT commands log for backward compatibility
+# (some older runs or external helpers may append to /tmp/sff/sff_commands.log).
+root_cmdlog_file="${LOG_DIR_ROOT%/}/${SFF_TMP_PREFIX}commands.log"
+{
+  printf '%s\n' "------------------------------------------------------------"
+  printf 'RUN START: %s\n' "$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)"
+  printf 'LOG_DIR: %s\n' "$LOG_DIR"
+} >> "$cmdlog_file" 2>/dev/null || true
+# Mirror header to root commands log as well (no-op if same file)
+if [[ "$cmdlog_file" != "$root_cmdlog_file" ]]; then
+  mkdir -p "$(dirname "$root_cmdlog_file")" 2>/dev/null || true
+  {
+    printf '%s\n' "------------------------------------------------------------"
+    printf 'RUN START: %s\n' "$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)"
+    printf 'LOG_DIR: %s\n' "$LOG_DIR"
+  } >> "$root_cmdlog_file" 2>/dev/null || true
+fi
+
 
 ##################
 # BEGIN FUNCTIONS
@@ -150,23 +172,25 @@ USAGE:
   -d (required) <dataset-path to search through>
   -c (optional) (compare snapshot files to live dataset files to find missing ones)
      (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
-  -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
-      Use with or without `-c` or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
+    -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
+      Use with or without `-c`, `--create-destroy-plan` (`-p`) or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
   -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
   -o (optional) <other-file-your-searching--for>
   -s (optional) <snapshot-name-regex-term> (will search all if not specified)
   -r (optional) (recursively search into child datasets)
   -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
-  --clean-snapshots (optional) orchestrate cleanup and write a destroy-plan (dry-run)
+  --create-destroy-plan (optional) orchestrate cleanup and write a destroy-plan (dry-run). This flag only generates a plan and does not attempt to apply it.
+  --clean-snapshots (optional) run cleanup and attempt to apply suggested snapshot deletions. This flag requests execution of the generated destroy plan; actual destructive execution still requires `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` (master guard).
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
   --skip-plan (optional) skip cleanup/plan generation for this run even if CREATE_DELETE_PLAN=1
    -h (this help)
 
 Notes for deletion:
-  - By default no destroys are executed. To generate a plan use --clean-snapshots.
-  - To attempt to apply destroys enable `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` and then
-    re-run with `--clean-snapshots` to generate/apply the plan. Applying a generated
-    plan requires enabling the master switch and confirming the interactive prompt.
+  - By default no destroys are executed. To generate a plan use `--create-destroy-plan` (plan-only). To request applying a generated plan in the same run, use `--clean-snapshots` (execution requested). Note: actual execution is gated by the `ALLOW_DESTROY_SNAPS` master switch in `lib/common.sh`.
+  # To attempt to apply destroys enable `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` and then
+    # re-run with `--clean-snapshots` to request execution of the generated plan (or use
+    # `--create-destroy-plan` to only generate a plan). Applying a generated
+    # plan requires enabling the master switch and confirming the interactive prompt.
   - You can also use --force to include '-f' on generated '/sbin/zfs destroy' commands in the plan.
 
   -r recursive search, searches recursively to specified dataset. Overrides dataset trailing wildcard paths, so does not obey the wildcard portion of the paths.  E.g. /pool/data/set/*/*/* will still recursively search in all /pool/data/set/. However, wildcards that aren't trailing still function as expected.  E.g. /pool/*/set/ will correctly still recurse through all datasets in /pool/data/set, where /pool/*/set/*/* will still recurse through the same, as the trailing wildcards are not obeyed when -r is used
@@ -207,15 +231,16 @@ Examples:
 
   # Deletion examples — plan and force (apply requires enabling ALLOW_DESTROY_SNAPS in config)
   # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
-  snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots -s "*" -f "index.html"
+  snapshots-find-file -c -d "/nas/live/cloud" --create-destroy-plan -s "*" -f "index.html"
 
   # To apply a generated plan interactively, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh,
-  # then re-run with --clean-snapshots to generate and (after confirmation) execute the plan.
+  # then re-run with --clean-snapshots to request execution of the generated plan (or use
+  # --create-destroy-plan to only generate a plan). After confirmation the plan may be executed.
   # force destroy in generated plan (adds -f to zfs destroy when executed)
-  snapshots-find-file -c -d "/nas/live/cloud" --clean-snapshots --force -s "*" -f "index.html"
+  snapshots-find-file -c -d "/nas/live/cloud" --create-destroy-plan --force -s "*" -f "index.html"
 
   # advanced: call cleanup function directly for a subset of datasets (debug)
-  bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
+  bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_snapshot_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
 
 Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/').
 EXAMPLES
@@ -320,7 +345,7 @@ function parse_arguments() {
     # confuse getopts parsing and may consume the wrong token as the option value.
     if [[ "$_a" == -?* && "$_a" != --* && ${#_a} -gt 2 ]]; then
       if [[ "$_a" == *d* || "$_a" == *f* ]]; then
-        echo -e "${YELLOW}Error: -d and -f must be separate tokens and placed immediately before their argument.\nExample: snapshots-find-file -d /pool/data/set -f index.html --clean-snapshots${NC}" >&2
+        echo -e "${YELLOW}Error: -d and -f must be separate tokens and placed immediately before their argument.\nExample: snapshots-find-file -d /pool/data/set -f index.html --create-destroy-plan${NC}" >&2
         exit 1
       fi
     fi
@@ -341,8 +366,11 @@ function parse_arguments() {
         VVERBOSE=1; shift ;;
       -q|--quiet)
         QUIET=1; shift ;;
-      --clean-snapshots)
+      --create-destroy-plan)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
+      --clean-snapshots)
+        # Request full cleanup: generate a plan and request execution for this run.
+        REQUEST_SNAP_DELETE_PLAN=1; REQUEST_ALLOW_DESTROY_SNAPS=1; shift ;;
       --force)
         # shellcheck disable=SC2034
         ENABLE_ZFS_DESTROY_FORCE=1; shift ;;
@@ -365,7 +393,7 @@ function parse_arguments() {
   # restore positional args for getopts
   set -- "${new_args[@]}"
   # include 'q' and 'D' in the option string so getopts recognizes them
-  while getopts ":d:f:o:s:rvhcVqDz" ARG; do
+  while getopts ":d:f:o:s:rvhcpVqDz" ARG; do
     case "$ARG" in
       q)
         # shellcheck disable=SC2034
@@ -393,6 +421,8 @@ function parse_arguments() {
         REQUEST_SNAP_DELETE_PLAN=1 ;;
       z)
         USE_ZDIFF=1 ;;
+      p)
+        REQUEST_SNAP_DELETE_PLAN=1 ;;
       # Bench has no short option
       # SKIP_PLAN short form not bound to a single-letter short flag (use --skip-plan)
       c)
@@ -421,7 +451,7 @@ function parse_arguments() {
   # edited in the file to enable destructive behavior.
   if [[ "${ALLOW_CREATE_DELETE_PLAN:-1}" -eq 0 ]]; then
     if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
-      echo -e "${YELLOW}Note: --clean-snapshots ignored because destroy-plan generation is disabled in configuration.${NC}"
+      echo -e "${YELLOW}Note: Plan-generation request ignored because CREATE_DELETE_PLAN is disabled in configuration. Use --create-destroy-plan to request a plan; use --clean-snapshots to request execution when allowed.${NC}"
     fi
     CREATE_DELETE_PLAN=0
   else
@@ -515,7 +545,10 @@ function discover_datasets() {
 
   if [[ $recursive_flag == 1 ]]; then
     # Use mapfile for Bash 4.2 compatibility and to safely read lines into an array
-    mapfile -t tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null | tail -n +2)
+    # NOTE: `zfs list -rH -o name` already emits one dataset per line without a
+    # header; do NOT strip the first line with `tail -n +2` as that accidentally
+    # drops the requested dataset when recursive discovery is used.
+    mapfile -t tmp_datasets < <(zfs list -rH -o name "${datasetpath%/}" 2>/dev/null)
   else
     # Include only the specified dataset
     mapfile -t tmp_datasets < <(zfs list -H -o name "${datasetpath%/}" 2>/dev/null)
@@ -728,13 +761,19 @@ function sff_run() {
   vlog "sff_run: $*"
   local logfile="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
   mkdir -p "$(dirname "$logfile")" 2>/dev/null || true
-  echo "RUN: $*" >> "$logfile"
+  local start_ts
+  start_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
+  echo "RUN: ${start_ts} $*" >> "$logfile"
   if "$@" > >(tee -a "$logfile") 2> >(tee -a "$logfile" >&2); then
-    echo "EXIT:0" >> "$logfile"
+    local end_ts
+    end_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
+    echo "EXIT:0 END:${end_ts}" >> "$logfile"
     return 0
   else
     local st=$?
-    echo "EXIT:$st" >> "$logfile"
+    local end_ts
+    end_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
+    echo "EXIT:${st} END:${end_ts}" >> "$logfile"
     return $st
   fi
 }
@@ -765,7 +804,9 @@ function sff_zfs_diff() {
   # Telemetry: record start time (ns) when available
   local start_ns end_ns dur_ms
   start_ns=$(date +%s%N 2>/dev/null || echo 0)
-  echo "RUN: $zfs_bin diff $a $b START:$start_ns" >> "$logfile"
+  local run_ts
+  run_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
+  echo "RUN: ${run_ts} $zfs_bin diff $a $b START_NS:$start_ns" >> "$logfile"
   "$zfs_bin" diff "$a" "$b" >"$tmp" 2>&1 || true
   local st=$?
   end_ns=$(date +%s%N 2>/dev/null || echo 0)
@@ -775,7 +816,9 @@ function sff_zfs_diff() {
     dur_ms=0
   fi
   cat "$tmp" >> "$logfile"
-  echo "EXIT:$st DURATION_MS:$dur_ms" >> "$logfile"
+  local end_ts
+  end_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
+  echo "EXIT:${st} END:${end_ts} DURATION_MS:${dur_ms}" >> "$logfile"
 
   if [[ $st -ne 0 ]]; then
     local out
@@ -811,7 +854,7 @@ function sff_zfs_diff() {
   cat "$tmp"
   # If successful, record zdiff usage marker
   if [[ $st -eq 0 ]]; then
-    echo "ZDIFF_USED: $a $b DURATION_MS:$dur_ms" >> "$logfile"
+    echo "ZDIFF_USED: ${end_ts} $a $b DURATION_MS:${dur_ms}" >> "$logfile"
     # Informational on stderr for interactive runs
     echo -e "${CYAN}zdiff: $a -> $b took ${dur_ms}ms${NC}" >&2
   fi

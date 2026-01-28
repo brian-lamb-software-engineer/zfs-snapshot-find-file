@@ -70,8 +70,8 @@ This merged plan covers both the docs-first rename (minor) and the major snapsho
 Core tasks
 
 1. Audit and rename (docs-first)
-  - Replace `--clean-snapshots` references in docs/tests with `--create-destroy-plan` (`-p`) and add a deprecation hint/alias for one release.
-  - Update `readme.md`, `PRD.md`, and examples to show `-p` as canonical (no behavior change in this step).
+  - Replace plan-generation usages with `--create-destroy-plan` (`-p`) in docs/tests and examples; update any references to `--clean-snapshots` so it requests execution of a generated plan rather than acting as the canonical plan flag.
+  - Update `readme.md`, `PRD.md`, and examples to reflect the distinct semantics: `--create-destroy-plan` = plan-only, `--clean-snapshots` = request execution (still gated by `ALLOW_DESTROY_SNAPS`).
 
 2. Snapshot-pruning safety checks (behavioral specification, docs-first)
   - Comparison approach: compare adjacent snapshots using `sff_zfs_diff dataset@old dataset@new`. Empty zdiff output with exit 0 marks `old` as a candidate.
@@ -103,7 +103,7 @@ Core tasks
 
 Acceptance criteria
 
-- Docs updated to reference `--create-destroy-plan` as canonical, `--clean-snapshots` prints a one-release deprecation hint.
+- Docs updated to reference `--create-destroy-plan` as the plan-only flag and `--clean-snapshots` as the execution-request flag (documentation and examples updated accordingly).
 - Snapshot-pruning flow performs zdiff comparisons, runs holds/clones/bookmark/replication checks, records all artifacts under `LOG_DIR`, and writes annotated destroy plans (dry-run).
 - Parity fixtures show identical summary artifacts between `zfs diff` and `find` flows before any promotion to default.
 - No destructive action occurs without the master guard and interactive confirmation.
@@ -128,7 +128,7 @@ Merge these docs-first changes into `PRD.md` now. After your approval I will:
 3. Generate cleanup plan (dry-run)
   - Run:
     ```bash
-    snapshots-find-file --clean-snapshots -d <dataset> -s <snap-regex> -f <file-pattern>
+    snapshots-find-file --create-destroy-plan -d <dataset> -s <snap-regex> -f <file-pattern>
     ```
   - Validate output:
     - Each destroy candidate includes `# BECAUSE:` and `# Command:` details.
@@ -192,7 +192,7 @@ Current repository state (inspection summary)
   - `lib/common.sh`: CLI parsing, initialization, constants, global vars, and helpers (`help`, `parse_arguments`, `initialize_search_parameters`). This file is a special shared utilities file and should remain as the common dependency.
   - `lib/zfs-search.sh`: `process_snapshots_for_dataset()` — walks snapshot directories and finds files (COMPARE and non-COMPARE modes).
   - `lib/zfs-compare.sh`: `compare_snapshot_files_to_live_dataset()` and `log_snapshot_deltas()` — compares snapshot file lists to live dataset and produces delta logs.
-  - `lib/zfs-cleanup.sh`: `identify_and_suggest_deletion_candidates()` — analyzes `zfs diff` output and prints candidate destroy statements (non-destructive suggestions).
+  - `lib/zfs-cleanup.sh`: `identify_and_suggest_snapshot_deletion_candidates()` — analyzes `zfs diff` output and prints snapshot deletion candidate destroy statements (non-destructive suggestions).
 
 Notes about `snapshots-find-file` (sff)
 - `sff` currently contains only orchestration: sourcing libs, parsing arguments, initializing, iterating datasets, invoking `process_snapshots_for_dataset` for each dataset, and invoking compare/cleanup flows when `-c` is used. No leftover functional code was found in `sff` that executes core logic — all substantive logic appears in `lib/*.sh`.
@@ -206,7 +206,7 @@ Identified gaps & recommendations (Phase 1 -> cataloging outcomes)
 1. Confirmation: no substantive code remains in `sff` beyond orchestration. The "fourth" file you referenced is present; the remaining work is extraction/splitting inside `lib/*.sh` files (Phase 2).
 2. Enforce function length rule in Phase 2: identify functions >60 lines and split into smaller helpers. Candidate functions to check:
    - `process_snapshots_for_dataset()` (zfs-search.sh)
-   - `identify_and_suggest_deletion_candidates()` (zfs-cleanup.sh)
+  - `identify_and_suggest_snapshot_deletion_candidates()` (zfs-cleanup.sh)
    - `compare_snapshot_files_to_live_dataset()` (zfs-compare.sh)
 3. Add unit / integration test harness (small test datasets or mocked `zfs` outputs). Prefer a `--test-mode` flag that uses local directories rather than real `zfs` for fast dev.
 4. Add static checks: `shellcheck` and a simple CI job (optional) to run lint/tests during refactor.
@@ -251,22 +251,20 @@ Compare mode behavior note:
 - Compare writes ignored matches to `compare-ignore-<timestamp>.out`. Be cautious with `REGEX_IGNORE_PATTERNS`: overly broad patterns can hide snapshot-only files and lead to missed dataloss reporting. Review the ignored-log when running compares. Consider adding --no-auto-recursive later.
 
 Destroy safety recommendations (Phase 2 - before enabling automated destruction):
--- Keep plan-only and apply separated: `--clean-snapshots` (plan-only). Apply is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh` and requires an interactive confirmation.
+- Keep plan-only and apply separated: `--create-destroy-plan` (plan-only). To request applying a generated plan in the same run use `--clean-snapshots`. Apply is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh` and requires an interactive confirmation.
 - Use a permanent top-level configuration guard for execution: require the master switch `ALLOW_DESTROY_SNAPS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
-- Preserve an interactive confirmation step before executing any plan. Also generate and persist a human-readable pre-destroy report for review.
-
 ---
 
 Phase 2 — Modularization & Safe Delete Scaffolding (2026‑01‑19, Status: 🚧 In Progress)
 
 Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
 
- - Added deletion orchestration: `--clean-snapshots` (plan-only). The plan-only flow is controlled by `CREATE_DELETE_PLAN` and actual execution is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch.
+ - Added deletion orchestration: `--create-destroy-plan` (plan-only). The plan-only flow is controlled by `CREATE_DELETE_PLAN` and actual execution is gated by the master config `ALLOW_DESTROY_SNAPS` in `lib/common.sh`. A `--force` option is available to include `-f` on generated `zfs destroy` commands when applying a plan after enabling the master switch. Use `--clean-snapshots` to request execution of the generated plan in the same run (execution still blocked unless `ALLOW_DESTROY_SNAPS=1`).
 - Implemented generation of an executable destroy plan file (`/tmp/destroy-plan-<timestamp>.sh`) while continuing to display `WOULD delete` and commented `# /sbin/zfs destroy "<snap>"` lines in CLI output for review.
 - Interactive confirmation is required before any plan is executed; there is no environment-variable bypass — enabling destructive runs requires editing `lib/common.sh` to set `ALLOW_DESTROY_SNAPS=1`.
 - Split several long functions and moved shared helpers into `lib/common.sh` (e.g., `record_found_file`, `prompt_confirm`) to improve readability and reuse. Notable refactors:
   - `process_snapshots_for_dataset()` partially split into compare/non-compare handlers in `lib/zfs-search.sh` and now prints per-dataset totals in non-compare runs.
-  - `identify_and_suggest_deletion_candidates()` was split into helper collectors and evaluator/planner in `lib/zfs-cleanup.sh` (plan generation and gated execution).
+  - `identify_and_suggest_snapshot_deletion_candidates()` was split into helper collectors and evaluator/planner in `lib/zfs-cleanup.sh` (plan generation and gated execution).
 - Reordered comparison output so the neutral-colored comparison summary is printed at the bottom of CLI output; `lib/zfs-compare.sh` now writes the summary to logs and `snapshots-find-file` prints the CSV-derived summary last.
 
 These changes are intentionally conservative: destructive operations remain gated and require explicit flags and interactive confirmation. The next Phase 2 steps are to add test fixtures, further break down any remaining functions >60 lines, and add CI lint/tests before considering unattended execution.
@@ -299,14 +297,15 @@ Finalize the comparison and cleanup pipeline so snapshot deletions are safe, rev
 
 ### Verification Steps
 1. **Compare dry run:**
-   ```bash
-   snapshots-find-file -c -d <dataset> --clean-snapshots -s <snap-regex> -f <file-pattern>
+  ```bash
+  snapshots-find-file -c -d <dataset> --create-destroy-plan -s <snap-regex> -f <file-pattern>
 Inspect artifacts: verify both sff_acc_deleted-<ts>.csv and sff_snap_holding-<ts>.txt.
 
 Generate cleanup plan:
 
-bash
-snapshots-find-file --clean-snapshots
+```bash
+snapshots-find-file --create-destroy-plan
+```
 Validate output: ensure each destroy candidate includes # BECAUSE: and # Command: details.
 
 Operational Notes
@@ -459,9 +458,9 @@ Constraints
  
 ## PHASE 4 — Rename CLI + Promote zfs-diff to Non-Compare Runs (2026-03-01, Status: 🧩 Planned)
 
-Objective
+- Objective
 
-- Minor (docs-first): rename the canonical CLI for plan generation from `--clean-snapshots` to `--create-destroy-plan` (`-p`) with `--clean-snapshots` retained as a one-release alias that emits a deprecation warning.
+- Minor (docs-first): rename the canonical CLI for plan generation to `--create-destroy-plan` (`-p`) and repurpose `--clean-snapshots` to request execution of a generated plan (distinct semantics: plan-only vs execution-request).
 - Major (behavior): enable `zfs diff` as the preferred fast-path for non-compare runs (non-`-c`), replacing `find`-based enumeration where safe and validated; provide per-dataset fallback to `find` when `zfs` is unavailable or unsuitable.
 
 Rationale
@@ -469,9 +468,9 @@ Rationale
 - The rename reduces operator confusion: `--create-destroy-plan` clearly communicates plan-only semantics.
 - Promoting `zfs diff` to non-compare runs significantly improves speed and accuracy for many workloads; doing it in a staged, tests-first manner reduces risk.
 
-Scope (what this phase will/do not do)
+- Scope (what this phase will/do not do)
 
-- Includes: docs rename, CLI alias + deprecation, opt-in `-z/--zfs-diff` wiring into non-compare flows, per-dataset zdiff logging, parity smoke tests, and a staged promotion to default after verification.
+- Includes: docs rename and CLI semantic update (`--create-destroy-plan` = plan-only, `--clean-snapshots` = execution-request), opt-in `-z/--zfs-diff` wiring into non-compare flows, per-dataset zdiff logging, parity smoke tests, and a staged promotion to default after verification.
 - Excludes: changing plan-first safety controls (`ALLOW_DESTROY_SNAPS` stays gated) and removing the ability to use `find` as a fallback or opt-out.
 
 Implementation Plan (phased)
@@ -511,8 +510,8 @@ A: You can compare snapshots pairwise (e.g., adjacent snapshots) using `zfs diff
 - Persist all pre-delete checks and zdiff outputs under the run `LOG_DIR` so an operator can review before applying any plan.
 
 ## Command semantics and UX decisions (docs-first)
-- Canonical flag: `--create-destroy-plan` (`-p`) — generates a plan only and implies snapshot-compare behavior when appropriate.
-- Deprecated alias: `--clean-snapshots` prints a one-release deprecation message pointing to `--create-destroy-plan` but remains functional for a short window.
+  - Canonical flag: `--create-destroy-plan` (`-p`) — generates a plan only and implies snapshot-compare behavior when appropriate.
+  - Execution flag: `--clean-snapshots` — requests cleanup execution for the generated plan in the same run (still subject to `ALLOW_DESTROY_SNAPS` master guard and interactive confirmation).
 - Behavior: when `-p` is specified the tool will implicitly enable snapshot-compare flows (equivalent to `-c` for pruning) so operators need not pass `-c` explicitly for snapshot pruning.
 - Zdiff opt-in: `-z` / `--zfs-diff` controls whether `sff_zfs_diff` is preferred; `-z` with `-p` will prefer zdiff and fall back per-dataset to `find` when zdiff fails (fallbacks are logged).
 
@@ -538,14 +537,14 @@ A: You can compare snapshots pairwise (e.g., adjacent snapshots) using `zfs diff
   - `zfs get -H -o value clones pool/dataset@2026-01-01`
 
 ## Implementation options (docs-first; code only on approval)
-- Implement `--create-destroy-plan` (`-p`) as the canonical plan generator and keep `--clean-snapshots` as an alias.
+-- Implement `--create-destroy-plan` (`-p`) as the canonical plan generator and implement `--clean-snapshots` to request execution of the generated plan in the same run.
 - Implement a `--snap-only-compare` or make `-p` imply the snapshot-compare behavior (preferred: `-p` implies compare for pruning).
 - Wire `sff_zfs_diff` into the pruning flow when `-z` is present; record per-dataset zdiff outputs and fallback reasons to `commands.log`.
 - Generate the destroy-plan with annotated `# BECAUSE:` and `# CHECK:` lines for every candidate.
 
 ## Operator approval
 -  After you approve the PRD changes we will:
-  1. Audit all `--clean-snapshots` occurrences and stage the deprecation rename across docs/tests (the Minor piece of this).
+  1. Audit all occurrences and update docs/tests: replace plan-generation examples with `--create-destroy-plan` and use `--clean-snapshots` where an execution request is intended.
   2. Implement `-p` parse semantics so it implies snapshot-compare for pruning. (This begins the Major part)
   3. Wire `-z` into pruning flow with per-dataset fallback and detailed logging.
   4. Add deterministic fixture-driven parity tests and operator-review output.
@@ -567,9 +566,9 @@ A: You can compare snapshots pairwise (e.g., adjacent snapshots) using `zfs diff
   - If parity tests pass and operator review approves, change non-compare runs to prefer `zfs diff` by default (with `--no-zdiff` opt-out).
   - Maintain explicit config guard and interactive checks for any destructive apply operations.
 
-Acceptance Criteria
+- Acceptance Criteria
 
-- Documentation and tests reference `--create-destroy-plan` as canonical; `--clean-snapshots` as an alias.
+- Documentation and tests reference `--create-destroy-plan` as the plan-only flag; `--clean-snapshots` as the execution-request flag. Tests and docs show distinct semantics and examples for both.
 - Parity smoke tests pass for representative fixtures: summary CSVs and candidate lists match between `zfs diff` and `find` flows.
 - Per-dataset fallback behavior is implemented and logged; no silent failures.
 - No change to plan-first safety model: disabling `ALLOW_DESTROY_SNAPS` remains effective.

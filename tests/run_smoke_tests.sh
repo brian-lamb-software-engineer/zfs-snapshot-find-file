@@ -19,8 +19,9 @@ fi
 : "${SFF_DATASET:=/nas/live/cloud/tcc}"
 
 CMDS=(
-  "snapshots-find-file -c -d \"$SFF_DATASET\" --clean-snapshots -s \"*\" -f \"index.html\""
-  "snapshots-find-file -cv -d \"$SFF_DATASET\" --clean-snapshots -s \"*\" -f \"index.html\""
+  "snapshots-find-file -c -d \"$SFF_DATASET\" --create-destroy-plan -s \"*\" -f \"index.html\""
+  "snapshots-find-file -cv -d \"$SFF_DATASET\" --create-destroy-plan -s \"*\" -f \"index.html\""
+
 )
 
 for cmd in "${CMDS[@]}"; do

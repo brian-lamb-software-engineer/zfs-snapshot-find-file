@@ -55,7 +55,7 @@ fi
 : "${SFF_FILE_PATTERN:=*}"
 
 # Run the tool (dry-run) and capture all output.
-./snapshots-find-file -cvv -d "$SFF_DATASET" -s "$SFF_SNAPSHOT_PATTERN" --clean-snapshots -f "$SFF_FILE_PATTERN" > "$RUN_OUT" 2>&1 || true
+./snapshots-find-file -cvv -d "$SFF_DATASET" -s "$SFF_SNAPSHOT_PATTERN" --create-destroy-plan -f "$SFF_FILE_PATTERN" > "$RUN_OUT" 2>&1 || true
 
 echo "Run output saved to: $RUN_OUT" >> "$TEST_LOG"
 

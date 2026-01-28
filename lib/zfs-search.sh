@@ -155,8 +155,61 @@ function _process_snappath() {
     creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
     _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME_local" "$creation_time_epoch"
   else
-    _handle_noncompare_snapdir "$snappath" "$dataset"
+    # Prefer zfs diff fast-path for non-compare runs when requested.
+    if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
+      local full_snap_id
+      full_snap_id="${dataset_name}@${SNAPNAME}"
+      mapfile -t diff_output < <(sff_zfs_diff "$full_snap_id" "$dataset_name" 2>/dev/null)
+      if [[ ${#diff_output[@]} -eq 0 ]]; then
+        # Fallback to legacy find when zdiff produced no output or failed
+        echo -e "${YELLOW}Using find for dataset: ${dataset} (zdiff not available for this snapshot)${NC}" >&2
+        _handle_noncompare_snapdir "$snappath" "$dataset"
+      else
+        for line in "${diff_output[@]}"; do
+          local type="${line:0:1}"
+          local path="${line:2}"
+          # normalize leading slash from paths to match find-style output
+          path="${path#/}"
+          # Check against FILEARR patterns; if matches, record the file
+          if _path_matches_filearr "$path"; then
+            # For consistency with legacy path format, prefix with dataset filesystem root
+            record_found_file "$path"
+          fi
+        done
+      fi
+    else
+      _handle_noncompare_snapdir "$snappath" "$dataset"
+    fi
   fi
+}
+
+# Helper: check if a given path matches any file patterns in FILEARR
+function _path_matches_filearr() {
+  local path="$1"
+  # If FILEARR is empty, match all
+  if [[ ${#FILEARR[@]} -eq 0 ]]; then
+    return 0
+  fi
+  # Iterate FILEARR as key/value pairs (-name PAT or -path PAT)
+  local i=0
+  while [[ $i -lt ${#FILEARR[@]} ]]; do
+    local key="${FILEARR[$i]}"
+    local val="${FILEARR[$((i+1))]:-}"
+    if [[ "$key" == "-name" ]]; then
+      local base
+      base="${path##*/}"
+      if [[ "$base" == $val ]]; then
+        return 0
+      fi
+    elif [[ "$key" == "-path" ]]; then
+      # patterns in FILEARR for -path were built with leading/trailing '*' as needed
+      if [[ "$path" == $val ]]; then
+        return 0
+      fi
+    fi
+    i=$((i+2))
+  done
+  return 1
 }
 
 function process_snapshots_for_dataset() {

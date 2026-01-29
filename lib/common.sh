@@ -232,6 +232,8 @@ Examples:
   # Deletion examples — plan and force (apply requires enabling ALLOW_DESTROY_SNAPS in config)
   # generate a destroy plan (dry-run) for index.html in /nas/live/cloud
   snapshots-find-file -c -d "/nas/live/cloud" --create-destroy-plan -s "*" -f "index.html"
+  # same using short flag -p for plan-only
+  snapshots-find-file -c -d "/nas/live/cloud" -p -s "*" -f "index.html"
 
   # To apply a generated plan interactively, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh,
   # then re-run with --clean-snapshots to request execution of the generated plan (or use
@@ -252,6 +254,15 @@ function help_error_response() {
   help_usage_examples
   echo
   echo -e "${YELLOW}Error: Unrecognized option: ${opt}${NC}"
+  exit 1
+}
+
+function help_conflict_response() {
+  local opt_a="${1:-}"; local opt_b="${2:-}"
+  echo
+  help_usage_examples
+  echo
+  echo -e "${YELLOW}Error: Conflicting options: ${opt_a} and ${opt_b} cannot be combined.${NC}"
   exit 1
 }
 
@@ -378,6 +389,9 @@ function parse_arguments() {
         VVERBOSE=1; shift ;;
       --zfs-diff)
         USE_ZDIFF=1; shift ;;
+      --force-find)
+        # Force legacy find usage (skip zfs fast-paths) for testing/debugging
+        SKIP_ZFS_FAST=1; shift ;;
       --bench)
         # shellcheck disable=SC2034
         BENCH=1; shift ;;
@@ -428,7 +442,7 @@ function parse_arguments() {
       c)
          COMPARE=1 ;;
       h) help ;;
-      :) echo "argument missing" ;;
+      :) help_error_response "-$OPTARG" ;;
       \?) help_error_response "-$OPTARG" ;;
     esac
   done
@@ -490,6 +504,11 @@ function parse_arguments() {
   # These no-op references do not change values but prevent SC2034 warnings
   # about intentionally-declared global flags.
   : "${ENABLE_ZFS_DESTROY_FORCE:-${ENABLE_ZFS_DESTROY_FORCE}}" "${BENCH:-${BENCH}}" "${SKIP_PLAN:-${SKIP_PLAN}}" "${QUIET:-${QUIET}}" "${OTHERFILE:-${OTHERFILE}}" "${USE_ZDIFF:-${USE_ZDIFF}}"
+
+  # Defensive: don't allow mutually-conflicting runtime flags
+  if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -eq 1 ]]; then
+    help_conflict_response "-z/--zfs-diff" "--force-find"
+  fi
 }
 
 function initialize_search_parameters() {
@@ -778,6 +797,25 @@ function sff_run() {
   fi
 }
 
+# Track whether we've already printed a single 'Using find' banner for this run.
+# We only want one visible banner per run (printed on first fallback) rather
+# than per-dataset repetition.
+SFF_FIND_BANNER_PRINTED=0
+
+# Print a single global 'Using find' banner the first time any codepath needs
+# to fall back to legacy `find`. Also append a single `FALLBACK: USING_FIND: GLOBAL`
+# entry to the per-run commands log with a brief reason and the dataset that
+# triggered the first fallback.
+function sff_print_find_banner_once() {
+  local dataset="$1"
+  local context="$2"
+  if [[ "${SFF_FIND_BANNER_PRINTED:-0}" -eq 0 ]]; then
+    echo -e "${YELLOW}Using legacy 'find' for one or more datasets in this run. (First fallback: ${dataset} ${context})${NC}" >&2
+    printf 'FALLBACK: USING_FIND: GLOBAL %s FIRST:%s %s\n' "$(date +"%Y-%m-%d %H:%M:%S")" "$dataset" "$context" >> "${LOG_DIR}/${SFF_TMP_PREFIX}commands.log" 2>/dev/null || true
+    SFF_FIND_BANNER_PRINTED=1
+  fi
+}
+
 # ZFS diff wrapper: normalizes names, retries on ordering or leading-slash errors,
 # logs the full output to the commands log, and prints the diff output to stdout
 # so callers may pipe it as before.
@@ -793,6 +831,11 @@ function sff_zfs_diff() {
   else
     zfs_bin="zfs"
   fi
+
+  # Log and inform which zfs binary was selected for transparency/debugging.
+  # This helps explain why zdiff may succeed locally (e.g., /sbin/zfs vs PATH lookup).
+  echo -e "${CYAN}Using zfs binary: ${zfs_bin}${NC}" >&2
+  printf 'ZFS_BIN: %s %s\n' "$(date +"%Y-%m-%d %H:%M:%S")" "$zfs_bin" >> "$logfile" 2>/dev/null || true
 
   # Strip leading slashes from dataset/snapshot names (normalize)
   a="${a#/}"

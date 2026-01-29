@@ -32,6 +32,8 @@ Flags of interest:
 -- `--create-destroy-plan` (`-p`): generate a destroy plan (plan-only; does not apply)
 -- `--clean-snapshots`: request cleanup and attempt to apply suggested snapshot deletions (respects `ALLOW_DESTROY_SNAPS` master guard in `lib/common.sh`).
 - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
+ - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
+ - `--force-find` : force legacy `find` usage for testing/debugging (skips the `zfs diff` fast-path)
 
 By default the tool is conservative: it will not perform destructive actions
 unless explicitly enabled in the configuration file `lib/common.sh` (the
@@ -131,6 +133,12 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 
 ```bash
 ./snapshots-find-file --create-destroy-plan
+```
+
+- Generate a destroy plan (short flag `-p`):
+
+```bash
+./snapshots-find-file -p --create-destroy-plan
 ```
 
 - Very-verbose function-entry tracing:

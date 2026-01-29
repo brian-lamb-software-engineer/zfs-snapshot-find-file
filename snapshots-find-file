@@ -45,17 +45,17 @@ if [[ ("${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 || "${CREATE_DELETE_PLAN:-0}" -eq 
     # whether we should prefer zdiff or fall back to find for this dataset.
     probe_snap=""
     probe_snap=$(sff_run /sbin/zfs list -t snapshot -o name -s creation "${dataset}" 2>/dev/null | tail -n +2 | head -n1 || true)
-    if [[ -n "${probe_snap}" ]]; then
+      if [[ -n "${probe_snap}" ]]; then
       # probe zdiff using probe_snap vs dataset-name form
       probe_ok=1
       sff_zfs_diff "${probe_snap}" "${dataset#/}" >/dev/null 2>&1 || probe_ok=0
       if [[ ${probe_ok} -eq 1 ]]; then
         echo -e "${GREEN}Using zdiff for dataset: ${dataset}${NC}"
       else
-        echo -e "${YELLOW}Zdff probe failed; using find for dataset: ${dataset}${NC}"
+        sff_print_find_banner_once "$dataset" "zdiff probe failed"
       fi
     else
-      echo -e "${YELLOW}No snapshots found for probe; using find for dataset: ${dataset}${NC}"
+      sff_print_find_banner_once "$dataset" "no snapshots for probe"
     fi
     # call cleanup identification which itself will use zdiff per-snapshot and fall back per-dataset
     identify_and_suggest_snapshot_deletion_candidates "${DATASETPATH_FS}" "${dataset}"

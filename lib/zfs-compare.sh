@@ -22,6 +22,8 @@ function _gather_live_files() {
   # Use -L to dereference symlinks to ensure we get actual file paths.
   # Using -print0 and xargs -0 for robust handling of special characters in filenames.
   #/bin/sudo /bin/find "$live_dataset_path" -type f -print0 2>/dev/null | xargs -0 -I {} bash -c 'echo "{}"' > "$live_files_tmp"
+  # Announce using legacy find (deduped) and record in commands log for traceability
+  sff_print_find_banner_once "$live_dataset_path" "collecting live files"
   # Use -print0 and xargs -0 to handle special chars robustly
   # Run the find pipeline and write results to the temp file. If the pipeline
   # fails, ensure the temp file still exists so callers don't error when reading.

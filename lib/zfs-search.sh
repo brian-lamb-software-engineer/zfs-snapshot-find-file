@@ -23,6 +23,8 @@ function _handle_compare_snapdir() {
   # Ensure shared tmp path exists or has a sensible fallback so static analysis
   # can see the variable is intentionally available in this sourced context.
   all_snapshot_files_found_tmp="${all_snapshot_files_found_tmp:-${LOG_DIR}/${SFF_TMP_PREFIX}all_snapshot_files_found.log}"
+  # Announce using legacy find (deduped) and record in commands log for traceability
+  sff_print_find_banner_once "$dataset" "compare: collecting files from snapshot"
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
     # pass args into a sub-bash so we can reconstruct the output reliably; keep SC2154 disabled because
     # `all_snapshot_files_found_tmp` is defined in `lib/common.sh` and exported into the shell environment.
@@ -40,6 +42,8 @@ function _handle_noncompare_snapdir() {
   vlog "dataset=${dataset} snappath=${snappath}"
 
   # shellcheck disable=SC2024
+  # Announce using legacy find (deduped) and record in commands log for traceability
+  sff_print_find_banner_once "$dataset" "non-compare snapshot scan"
   /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
   if [[ -s "$found_tmp" ]]; then
     local _quiet_notice_printed=0
@@ -162,7 +166,7 @@ function _process_snappath() {
       mapfile -t diff_output < <(sff_zfs_diff "$full_snap_id" "$dataset_name" 2>/dev/null)
       if [[ ${#diff_output[@]} -eq 0 ]]; then
         # Fallback to legacy find when zdiff produced no output or failed
-        echo -e "${YELLOW}Using find for dataset: ${dataset} (zdiff not available for this snapshot)${NC}" >&2
+        sff_print_find_banner_once "$dataset" "zdiff not available for snapshot"
         _handle_noncompare_snapdir "$snappath" "$dataset"
       else
         for line in "${diff_output[@]}"; do

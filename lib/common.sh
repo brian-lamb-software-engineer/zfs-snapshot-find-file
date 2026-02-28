@@ -7,8 +7,10 @@
 ##
 
 # Plan-only delete flag (creates a destroy plan but does not execute it).
-# NOTE: This is a config-level setting. To generate plans set this to 1
-# or pass --create-destroy-plan or --clean-snapshots
+# NOTE: This is a config-level setting. Default is 0 (disabled).
+# To generate plans at runtime pass --create-destroy-plan or --clean-snapshots
+#  or set CREATE_DELETE_PLAN=1 in this file to make plan-generation the default.  
+#  It will not destroy data, it will only print you a plan to do as such .
 CREATE_DELETE_PLAN=1
 # Master destroy execution flag (must be explicitly enabled in config).
 # WARNING: This is the master switch for destructive execution. Do NOT
@@ -54,9 +56,11 @@ ZFSSNAPDIR=".zfs/snapshot"
 # Example 3: Ignore macOS specific files
 # Example 4: Ignore Windows specific thumbnail files
 REGEX_IGNORE_PATTERNS_DEFAULT=("^.*\\.cache/.*$" "^.*/tmp/.*$" "^.*/\\.DS_Store$" "^.*/thumbs\\.db$")
+# how many results you want back from -l option to list largest snapshots
+LIST_AMOUNT=15
 
 # Color codes for output
-COL="\033["
+COL=$'\033['
 RED="${COL}0;31m"
 YELLOW="${COL}33m"
 BLUE="${COL}0;34m"
@@ -69,6 +73,7 @@ PURPLE="${COL}0;35m"
 # shellcheck disable=SC2034
 GREEN="${COL}0;32m"
 NC="${COL}0m" # No Color
+PINK="${COL}1;35m"
 
 # Export configuration flags so they are visible to sourced modules and to
 # silence static analysis (shellcheck) about intentionally-declared globals.
@@ -89,6 +94,9 @@ RECURSIVE=0
 COMPARE=0
 VERBOSE=0
 VVERBOSE=0
+MAX_DEPTH=0
+MAX_SNAPS=0
+SNAPSHOT_ONLY=0
 # shellcheck disable=SC2034
 # `QUIET` is read by other modules; keep declaration to document config.
 QUIET=0
@@ -114,6 +122,7 @@ DATASETS=() # Will store the list of datasets to iterate
 # shellcheck disable=SC2034
 REGEX_IGNORE_PATTERNS=("${REGEX_IGNORE_PATTERNS_DEFAULT[@]}")
 LOG_DIR="${LOG_DIR_ROOT%/}${SHORT_TIMESTAMP:+/${SHORT_TIMESTAMP}}"
+ERROR_OCCURRED=0
 
 ############################################################
 # BEGIN CODE
@@ -126,6 +135,12 @@ LOG_DIR="${LOG_DIR_ROOT%/}${SHORT_TIMESTAMP:+/${SHORT_TIMESTAMP}}"
 
 # Ensure the per-run directory exists early so writers can use it.
 mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+# Source zfs-specific error handlers (modularized in lib/zfs_errors.sh)
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/zfs_errors.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "$(dirname "${BASH_SOURCE[0]}")/zfs_errors.sh"
+fi
 
 # sets the path for the run-scoped list of snapshot files, truncates or creates that file
 #  (the : is a no-op; the redirection creates/truncates). Errors silenced and non-fatal
@@ -154,12 +169,53 @@ if [[ "$cmdlog_file" != "$root_cmdlog_file" ]]; then
   } >> "$root_cmdlog_file" 2>/dev/null || true
 fi
 
+# Print a compact run-vars header (only once at run start). This duplicates
+# a summary to stderr for interactive users and appends a structured block
+# to the per-run commands.log for auditing.
+{
+  # Compute compact verbose label inline (avoid calling functions not yet defined)
+  if [[ ${VVERBOSE:-0} -ge 2 ]]; then
+    _lbl="v3:"
+  elif [[ ${VVERBOSE:-0} -ge 1 ]]; then
+    _lbl="v2:"
+  elif [[ ${VERBOSE:-0} -ge 1 ]]; then
+    _lbl="v1:"
+  else
+    _lbl=""
+  fi
+  # Mirror a compact run-vars header to stderr only when very-verbose is enabled
+  if [[ ${VVERBOSE:-0} -ge 1 ]]; then
+    echo -e "${YELLOW}RUN-VARS-BEGIN${NC}" >&2
+    echo -e "${_lbl} ${YELLOW}CREATE_DELETE_PLAN=${CREATE_DELETE_PLAN} ALLOW_CREATE_DELETE_PLAN=${ALLOW_CREATE_DELETE_PLAN} ALLOW_DESTROY_SNAPS=${ALLOW_DESTROY_SNAPS} ENABLE_ZFS_DESTROY_FORCE=${ENABLE_ZFS_DESTROY_FORCE} USE_ZDIFF=${USE_ZDIFF}${NC}" >&2
+    echo -e "${_lbl} ${YELLOW}SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0} LOG_DIR_ROOT=${LOG_DIR_ROOT} LOG_DIR=${LOG_DIR} SFF_TMP_PREFIX=${SFF_TMP_PREFIX} ZFSSNAPDIR=${ZFSSNAPDIR}${NC}" >&2
+    echo -e "${_lbl} ${YELLOW}VERBOSE=${VERBOSE} VVERBOSE=${VVERBOSE} QUIET=${QUIET}${NC}" >&2
+  fi
+  {
+    printf 'RUN_VARS_BEGIN: %s\n' "$(date +"%Y-%m-%d %H:%M:%S")"
+    printf '  CREATE_DELETE_PLAN=%s\n' "${CREATE_DELETE_PLAN}"
+    printf '  ALLOW_CREATE_DELETE_PLAN=%s\n' "${ALLOW_CREATE_DELETE_PLAN}"
+    printf '  ALLOW_DESTROY_SNAPS=%s\n' "${ALLOW_DESTROY_SNAPS}"
+    printf '  ENABLE_ZFS_DESTROY_FORCE=%s\n' "${ENABLE_ZFS_DESTROY_FORCE}"
+    printf '  USE_ZDIFF=%s\n' "${USE_ZDIFF}"
+    printf '  SKIP_ZFS_FAST=%s\n' "${SKIP_ZFS_FAST:-0}"
+    printf '  LOG_DIR_ROOT=%s\n' "${LOG_DIR_ROOT}"
+    printf '  LOG_DIR=%s\n' "${LOG_DIR}"
+    printf '  SFF_TMP_PREFIX=%s\n' "${SFF_TMP_PREFIX}"
+    printf '  ZFSSNAPDIR=%s\n' "${ZFSSNAPDIR}"
+    printf '  VERBOSE=%s VVERBOSE=%s QUIET=%s\n' "${VERBOSE}" "${VVERBOSE}" "${QUIET}"
+  } >> "$cmdlog_file" 2>/dev/null || true
+}
+
 
 ##################
 # BEGIN FUNCTIONS
 
 function help(){
   cat <<'HELP'
+Usage: snapshots-find-file [ options ]
+Options are:
+[ -c ] [ -d <dataset> ] [ -f <file> ] [ -o <otherfile> ] [ -s <snap_regex> ] [ -r ] [ -v | -vv | -vvv ] [ -q ] [ -z ] [ -S ] [ -l ] [ --max-depth <n> ] [ --max-snaps <n> | -m <n> ]
+
 A ZFS snapshot search tool.
   - Uses a constructed 'find' command to search in specified snapshot for specified file, recursively by default.
   - Has the ability to search through multiple or all "snapshots" in a given dataset by using wildcard.
@@ -180,9 +236,16 @@ USAGE:
   -r (optional) (recursively search into child datasets)
   -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
   --create-destroy-plan (optional) orchestrate cleanup and write a destroy-plan (dry-run). This flag only generates a plan and does not attempt to apply it.
+  -C, --snap-only-compare (optional) run snapshot-only comparisons (pairwise snapshot diffs) instead of file-search; required by `--max-snaps`.
   --clean-snapshots (optional) run cleanup and attempt to apply suggested snapshot deletions. This flag requests execution of the generated destroy plan; actual destructive execution still requires `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` (master guard).
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
   --skip-plan (optional) skip cleanup/plan generation for this run even if CREATE_DELETE_PLAN=1
+
+    Additional utility flags (non-destructive):
+
+    - `--show-space`, `-S` : show ZFS dataset/pool available space using `zfs list -o name,avail` for the target dataset (requires `-d`).
+    - `--list-largest`, `-l` : list largest snapshots for the target dataset using `zfs list -t snapshot -o name,used,creation` sorted by `used` (requires `-d`).
+    - `--max-snaps <n>`, `-m <n>` : plan to keep only the newest <n> snapshots per-dataset; when used with `--create-destroy-plan` the tool will probe consecutive snapshots (oldest->newest) via `zfs diff` and mark older snapshots that are identical to their successor for deletion (plan-only). Use `--clean-snapshots` to request applying the generated plan (still gated by ALLOW_DESTROY_SNAPS).
    -h (this help)
 
 Notes for deletion:
@@ -244,6 +307,17 @@ Examples:
   # advanced: call cleanup function directly for a subset of datasets (debug)
   bash -lc 'source ./lib/common.sh; source ./lib/zfs-cleanup.sh; identify_and_suggest_snapshot_deletion_candidates "/nas/live/cloud" "/nas/live/cloud/tcc"'
 
+  # Additional utility examples:
+
+  # List largest snapshots for a dataset (shows top used snapshots):
+  snapshots-find-file -d "/pool/data/set" --list-largest -l
+
+  # Show ZFS available space for the target dataset:
+  snapshots-find-file -d "/pool/data/set" --show-space -S
+
+  # Snapshot-only compare mode (pairwise snapshot diffs) — useful with --max-snaps:
+  snapshots-find-file -d "/pool/data/set" -C -z --max-snaps 10 --create-destroy-plan
+
 Note: Dataset may be specified as either a ZFS name (e.g. pool/dataset) or a filesystem path (e.g. /pool/dataset). The tool normalizes both forms; prefer the filesystem path form (leading '/').
 EXAMPLES
 }
@@ -272,13 +346,39 @@ found_files_count=0
 # Record a found file to the global snapshot list and increment the counter
 function record_found_file() {
   local file="$1"
-  echo "$file" >> "$all_snapshot_files_found_tmp"
-  ((found_files_count++))
+  # If MAX_DEPTH is set, record the parent directory truncated to that depth
+  if [[ -n "${MAX_DEPTH:-0}" && ${MAX_DEPTH} -gt 0 ]]; then
+    local dir
+    dir=$(dirname "$file")
+    # remove leading slash for processing
+    local trim
+    trim="${dir#/}"
+    IFS='/' read -r -a parts <<< "$trim"
+    local cnt=${#parts[@]}
+    local rec
+    if [[ $cnt -le ${MAX_DEPTH} ]]; then
+      rec="/${trim}"
+    else
+      # join first N parts
+      rec="/$(printf "%s/" "${parts[@]:0:${MAX_DEPTH}}" | sed 's:/$::')/*"
+    fi
+    # Deduplicate: only append if not already recorded
+    if ! grep -Fxq "$rec" "$all_snapshot_files_found_tmp" 2>/dev/null; then
+      echo "$rec" >> "$all_snapshot_files_found_tmp"
+      ((found_files_count++))
+    fi
+  else
+    echo "$file" >> "$all_snapshot_files_found_tmp"
+    ((found_files_count++))
+  fi
 }
 
 # Verbose tracing helper: prints when VVERBOSE is enabled
 function vlog() {
-  if [[ ${VVERBOSE:-0} -eq 1 ]]; then
+  # Emit function/entry tracing when either -v or -vv is enabled so users
+  # see which functions are running with a simple `-v`. Preserve the
+  # more detailed internals output for -vvv (VVERBOSE>=2).
+  if [[ ${VERBOSE:-0} -ge 1 || ${VVERBOSE:-0} -ge 1 ]]; then
     # Send verbose tracing to stderr so command-substitutions that capture
     # function output are not polluted by debug text.
     # Auto-prefix messages with calling script and function so callers do not
@@ -287,12 +387,75 @@ function vlog() {
     local caller_file
     caller_file=$(basename "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")
     local msg="$*"
+    # Label the entry line according to the highest active level.
+    local _vlabel_entry
+    _vlabel_entry=$(label_for_level 2)
     if [[ -z "$msg" ]]; then
-      echo -e "${BLUE}${caller_file}::${caller_func}${NC}" >&2
+      echo -e "${_vlabel_entry} ${BLUE}${caller_file}::${caller_func}${NC}" >&2
     else
-      echo -e "${BLUE}${caller_file}::${caller_func}: ${NC}${msg}" >&2
+      echo -e "${_vlabel_entry} ${BLUE}${caller_file}::${caller_func}: ${NC}${msg}" >&2
+    fi
+
+    # For -vvv, emit a compact timestamped internals line (no VVV label)
+    # that includes caller, PID and selected top-level run-vars for quick
+    # debugging. Then print caller file::function:line via show_call_context.
+    if [[ ${VVERBOSE:-0} -ge 2 ]]; then
+      local _ts
+      _ts=$(date +"%Y-%m-%dT%H:%M:%S%z")
+      # Use v3 label for internals so v3-only lines show 'v3:' distinct from v2.
+      local _vlabel_internals
+      _vlabel_internals=$(label_for_level 3)
+      echo -e "${_vlabel_internals}${GREY}${_ts}${NC} ${WHITE}${caller_file}::${caller_func}${NC} pid=${$} LOG_DIR=${LOG_DIR} LOG_DIR_ROOT=${LOG_DIR_ROOT} SFF_TMP_PREFIX=${SFF_TMP_PREFIX} ZFSSNAPDIR=${ZFSSNAPDIR} USE_ZDIFF=${USE_ZDIFF:-0} SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0} CREATE_DELETE_PLAN=${CREATE_DELETE_PLAN:-0} QUIET=${QUIET:-0}" >&2
+      show_call_context "${_vlabel_internals}" >&2
     fi
   fi
+}
+
+
+# Show a compact caller context (file::function:line). Call from functions
+# when they want to emit which function is active. Example usage inside a
+# function: [[ ${VVERBOSE:-0} -ge 2 ]] && show_call_context
+function show_call_context() {
+  # Optional first arg is a label prefix (e.g. 'v3:') to print before the context.
+  local _label="${1:-}"
+  local caller_func="${FUNCNAME[1]:-MAIN}"
+  local caller_file
+  caller_file=$(basename "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")
+  local caller_line="${BASH_LINENO[0]:-0}"
+  # Print the line as `line:<n>` to make the meaning explicit
+  echo -e "${_label}${GREY}${caller_file}::${caller_func} line:${caller_line}${NC}"
+}
+
+# Return verbosity label: v1 for -v, v2 for -vv, v3 for -vvv; empty otherwise
+function verbose_label() {
+  # Return a single highest label (not cumulative). This is used for
+  # compact run headers where a single indicator is preferable.
+  if [[ ${VVERBOSE:-0} -ge 2 ]]; then
+    printf 'v3:'
+  elif [[ ${VVERBOSE:-0} -ge 1 ]]; then
+    printf 'v2:'
+  elif [[ ${VERBOSE:-0} -ge 1 ]]; then
+    printf 'v1:'
+  else
+    printf ''
+  fi
+}
+
+# Return a label only for the requested level if that level is active.
+# Usage: label_for_level 1  -> prints 'v1:' if VERBOSE
+#        label_for_level 2  -> prints 'v2:' if VVERBOSE>=1
+#        label_for_level 3  -> prints 'v3:' if VVERBOSE>=2
+function label_for_level() {
+  local lvl=${1:-}
+  case "$lvl" in
+    1)
+      [[ ${VERBOSE:-0} -ge 1 ]] && printf 'v1:' || printf '' ;;
+    2)
+      [[ ${VVERBOSE:-0} -ge 1 ]] && printf 'v2:' || printf '' ;;
+    3)
+      [[ ${VVERBOSE:-0} -ge 2 ]] && printf 'v3:' || printf '' ;;
+    *) printf '' ;;
+  esac
 }
 
 # Prompt for confirmation. Returns 0 if confirmed, non-zero otherwise.
@@ -346,9 +509,12 @@ function parse_arguments() {
   # are present (e.g. -vv or -cvv). Also honor long-form flags.
   local _v_count=0
   for _a in "$@"; do
-    # honor explicit long-form
+    # honor explicit long-form for verbosity levels
+    if [[ "$_a" == "--vvv" || "$_a" == "--very-very-verbose" ]]; then
+      _v_count=$(( _v_count + 3 )); continue
+    fi
     if [[ "$_a" == "--very-verbose" || "$_a" == "--vv" ]]; then
-      VVERBOSE=1; break
+      _v_count=$(( _v_count + 2 )); continue
     fi
     # If a short-form token contains 'd' or 'f' combined with other letters (eg '-dqz' or '-qfX'),
     # warn the user — '-d' and '-f' must be provided as standalone tokens followed by their
@@ -366,7 +532,6 @@ function parse_arguments() {
       local _v_only
       _v_only=${_a//[^v]/}
       _v_count=$(( _v_count + ${#_v_only} ))
-      if [[ $_v_count -ge 2 ]]; then VVERBOSE=1; break; fi
     fi
   done
   # Support long-form options by pre-scanning and removing them from positional args
@@ -375,18 +540,52 @@ function parse_arguments() {
     case "$1" in
       -vv)
         VVERBOSE=1; shift ;;
+      --show-space)
+        SHOW_SPACE=1; shift ;;
+      --list-largest)
+        LIST_LARGEST=1; shift ;;
+      -list-largest)
+        LIST_LARGEST=1; shift ;;
+      -show-space)
+        SHOW_SPACE=1; shift ;;
+      --max-depth)
+        if [[ -n "$2" && "$2" != --* ]]; then
+          MAX_DEPTH=$2; shift 2
+        else
+          echo -e "${RED}Error: --max-depth requires a numeric argument${NC}" >&2; exit 1
+        fi ;;
+      --max-snaps)
+        if [[ -n "$2" && "$2" != --* ]]; then
+          MAX_SNAPS=$2; shift 2
+        else
+          echo -e "${RED}Error: --max-snaps requires a numeric argument${NC}" >&2; exit 1
+        fi ;;
+      -max-snaps)
+        if [[ -n "$2" && "$2" != --* ]]; then
+          MAX_SNAPS=$2; shift 2
+        else
+          echo -e "${RED}Error: -max-snaps requires a numeric argument${NC}" >&2; exit 1
+        fi ;;
       -q|--quiet)
         QUIET=1; shift ;;
       --create-destroy-plan)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
+      --snap-only-compare)
+        SNAPSHOT_ONLY=1; shift ;;
+      -snap-only-compare)
+        SNAPSHOT_ONLY=1; shift ;;
+      -create-destroy-plan)
+        REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --clean-snapshots)
         # Request full cleanup: generate a plan and request execution for this run.
+        REQUEST_SNAP_DELETE_PLAN=1; REQUEST_ALLOW_DESTROY_SNAPS=1; shift ;;
+      -clean-snapshots)
         REQUEST_SNAP_DELETE_PLAN=1; REQUEST_ALLOW_DESTROY_SNAPS=1; shift ;;
       --force)
         # shellcheck disable=SC2034
         ENABLE_ZFS_DESTROY_FORCE=1; shift ;;
       --very-verbose)
-        VVERBOSE=1; shift ;;
+        VVERBOSE=1; VERBOSE=1; shift ;;
       --zfs-diff)
         USE_ZDIFF=1; shift ;;
       --force-find)
@@ -407,13 +606,21 @@ function parse_arguments() {
   # restore positional args for getopts
   set -- "${new_args[@]}"
   # include 'q' and 'D' in the option string so getopts recognizes them
-  while getopts ":d:f:o:s:rvhcpVqDz" ARG; do
+  while getopts ":d:f:o:s:rvhcpVqDzlSm:C" ARG; do
     case "$ARG" in
       q)
         # shellcheck disable=SC2034
         QUIET=1 ;;
       v) # echo "Running -$ARG flag for verbose output"
         VERBOSE=1 ;;
+      l)
+        LIST_LARGEST=1 ;;
+      S)
+        SHOW_SPACE=1 ;;
+      m)
+        MAX_SNAPS=$OPTARG ;;
+      C)
+        SNAPSHOT_ONLY=1 ;;
       V)
         VVERBOSE=1 ;;
       d) #echo "Running -d flag which is a placeholder to pass a dataset path arg ith it"
@@ -450,6 +657,17 @@ function parse_arguments() {
   # set back $1 index
   shift "$((OPTIND-1))"
 
+  # Apply verbosity token count collected earlier when parsing short-form args
+  # This ensures `-v`, `-vv`, `-vvv` or combined short flags like `-cvv`
+  # correctly enable `VERBOSE`/`VVERBOSE` levels.
+  if [[ ${_v_count:-0} -ge 3 ]]; then
+    VVERBOSE=2; VERBOSE=1
+  elif [[ ${_v_count:-0} -ge 2 ]]; then
+    VVERBOSE=1; VERBOSE=1
+  elif [[ ${_v_count:-0} -ge 1 ]]; then
+    VERBOSE=1
+  fi
+
   # Defensive validation: if the dataset path looks like an option (starts with '-')
   # it likely means argument parsing shifted incorrectly or the user mis-quoted.
   if [[ -n "$DATASETPATH" && "${DATASETPATH:0:1}" == "-" ]]; then
@@ -465,7 +683,9 @@ function parse_arguments() {
   # edited in the file to enable destructive behavior.
   if [[ "${ALLOW_CREATE_DELETE_PLAN:-1}" -eq 0 ]]; then
     if [[ "${REQUEST_SNAP_DELETE_PLAN:-0}" -eq 1 ]]; then
-      echo -e "${YELLOW}Note: Plan-generation request ignored because CREATE_DELETE_PLAN is disabled in configuration. Use --create-destroy-plan to request a plan; use --clean-snapshots to request execution when allowed.${NC}"
+      # Defer printing of the plan-generation notice until the end of the run
+      # so the message appears after dataset scanning and plan output.
+      NOTIFY_PLAN_GENERATION_IGNORED=1
     fi
     CREATE_DELETE_PLAN=0
   else
@@ -495,8 +715,10 @@ function parse_arguments() {
   fi
 
   # Warn the user if neither -f nor -s is provided
-  if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAP_SEARCH_REGEX ]]; then
-    echo -e "${YELLOW}No file pattern (-f) or snapshot regex (-s) specified. Defaulting to search for all files (*).${NC}"
+  if [[ ${SNAPSHOT_ONLY:-0} -eq 0 ]]; then
+    if [[ -z $FILENAME || $FILENAME == "*" ]] && [[ -z $SNAP_SEARCH_REGEX ]]; then
+      echo -e "${YELLOW}No file pattern (-f) or snapshot regex (-s) specified. Defaulting to search for all files (*).${NC}"
+    fi
   fi
 
   # Touch/mention CLI-toggled flags here so static analysis and downstream
@@ -509,12 +731,542 @@ function parse_arguments() {
   if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -eq 1 ]]; then
     help_conflict_response "-z/--zfs-diff" "--force-find"
   fi
+
+  # Convert collected -v counts into levels: 1 = -v, 2 = -vv, 3+ = -vvv
+  if [[ ${_v_count:-0} -ge 3 ]]; then
+    VVERBOSE=2; VERBOSE=1
+  elif [[ ${_v_count:-0} -ge 2 ]]; then
+    VVERBOSE=1; VERBOSE=1
+  elif [[ ${_v_count:-0} -eq 1 ]]; then
+    VERBOSE=1
+  fi
+
+  # Ensure any explicit VVERBOSE implies VERBOSE
+  if [[ "${VVERBOSE:-0}" -ge 1 ]]; then
+    VERBOSE=1
+  fi
+
+  # If the user requested one-off zfs-list utilities, run them now and exit.
+  if [[ "${SHOW_SPACE:-0}" -eq 1 ]]; then
+    _run_zfs_list_space
+    exit 0
+  fi
+  if [[ "${LIST_LARGEST:-0}" -eq 1 ]]; then
+    _run_zfs_list_largest
+    exit 0
+  fi
+
+  # If user requested max-snaps plan generation as a one-off operation,
+  # generate a plan and exit (plan-only). The plan generator probes
+  # consecutive snapshots (oldest->newest) and marks older snapshots
+  # that are identical to their successor for deletion until only
+  # MAX_SNAPS remain or no further identical candidates exist.
+  if [[ ${MAX_SNAPS:-0} -gt 0 ]]; then
+    if [[ ${SNAPSHOT_ONLY:-0} -ne 1 ]]; then
+      echo -e "${RED}Error: --max-snaps is only valid with snapshot-only compare mode (-C or --snap-only-compare).${NC}" >&2
+      help
+      exit 1
+    fi
+    if [[ -z "$DATASETPATH" ]]; then
+      echo -e "${RED}Error: --max-snaps requires -d <dataset>${NC}" >&2; help; exit 1
+    fi
+    if [[ ${REQUEST_SNAP_DELETE_PLAN:-0} -eq 1 ]]; then
+      # Show probe results first so operators see what was found before a plan
+      # is generated. Then generate the plan non-interactively (because the
+      # user explicitly requested plan generation via CLI flags).
+      probe_max_snaps "$DATASETPATH" "$MAX_SNAPS"
+      generate_max_snaps_plan "$DATASETPATH" "$MAX_SNAPS"
+      exit 0
+    fi
+  fi
+
+  # If user requested only to probe MAX_SNAPS (no plan requested), run probe and print recommendation
+  if [[ ${MAX_SNAPS:-0} -gt 0 ]]; then
+    if [[ ${SNAPSHOT_ONLY:-0} -ne 1 ]]; then
+      echo -e "${RED}Error: --max-snaps is only valid with snapshot-only compare mode (-C or --snap-only-compare).${NC}" >&2
+      help
+      exit 1
+    fi
+    if [[ -z "$DATASETPATH" ]]; then
+      echo -e "${RED}Error: --max-snaps requires -d <dataset>${NC}" >&2; help; exit 1
+    fi
+    if [[ ${REQUEST_SNAP_DELETE_PLAN:-0} -eq 0 ]]; then
+      probe_max_snaps "$DATASETPATH" "$MAX_SNAPS"
+      exit 0
+    fi
+  fi
+
+  # Default behavior: when compare mode (-c) is requested, prefer the
+  # zfs diff fast-path unless the caller explicitly requested skipping
+  # fast-paths (e.g. --force-find). This makes `-c` implicitly opt-in to
+  # zdiff for convenience.
+  if [[ "${COMPARE:-0}" -eq 1 && "${USE_ZDIFF:-0}" -eq 0 && "${SKIP_ZFS_FAST:-0}" -eq 0 ]]; then
+    USE_ZDIFF=1
+    [[ ${VERBOSE:-0} -ge 1 ]] && echo -e "${CYAN}Auto-enabled zdiff for compare mode (-c)${NC}" >&2
+  fi
 }
 
 function initialize_search_parameters() {
   _isp_build
   _isp_debug_print
   _isp_finalize
+}
+
+# Non-destructive utilities: show zfs space and list-largest snapshots.
+function _run_zfs_list_space() {
+  local target="${DATASETPATH:-}";
+  local zcmd
+  # Use human-readable sizes for display and align columns
+  if command -v /bin/sudo >/dev/null 2>&1; then
+    zcmd=(/bin/sudo /sbin/zfs "list" "-o" "name,avail" "-rH")
+  else
+    zcmd=(/sbin/zfs "list" "-o" "name,avail" "-rH")
+  fi
+  echo -e "${CYAN}ZFS available space (target: ${target:-all}):${NC}" >&2
+  local out
+  if [[ -n "$target" ]]; then
+    out=$("${zcmd[@]}" "$target" 2>/dev/null || true)
+  else
+    out=$("${zcmd[@]}" 2>/dev/null || true)
+  fi
+  if [[ -z "$out" ]]; then
+    echo "(no datasets found)" >&2
+    return 0
+  fi
+  # Print aligned columns: NAME (left), AVAIL (right) with NAME colored white
+  printf "%-50s %12s\n" "NAME" "AVAIL"
+  echo "$out" | while read -r name avail; do
+    local colored_name
+    colored_name="${WHITE}${name}${NC}"
+    printf "%-50s %12s\n" "$colored_name" "$avail"
+  done
+}
+
+function _run_zfs_list_largest() {
+  local target="${DATASETPATH:-}"
+  local zcmd
+  if command -v /bin/sudo >/dev/null 2>&1; then
+    zcmd=(/bin/sudo /sbin/zfs "list" "-t" "snapshot" "-o" "name,used,creation" "-rHp")
+  else
+    zcmd=(/sbin/zfs "list" "-t" "snapshot" "-o" "name,used,creation" "-rHp")
+  fi
+  echo -e "${CYAN}Largest snapshots for ${target}:${NC}" >&2
+  # We need numeric sorting by 'used' (bytes). Use -p output and then
+  # convert bytes to human-readable with numfmt for display.
+  local tmp
+  tmp=$({ "${zcmd[@]}" "${target}" 2>/dev/null || true; } )
+  if [[ -z "$tmp" ]]; then
+    echo "(no snapshots found)" >&2
+    return 0
+  fi
+  # Show top entries (count controlled by LIST_AMOUNT)
+  local limit=${LIST_AMOUNT:-22}
+  echo "$tmp" | sort -k2 -nr | head -n "$limit" | while IFS=$'\t' read -r name used creation; do
+    # Convert bytes to human-readable using numfmt if available
+    local used_hr
+    if command -v numfmt >/dev/null 2>&1; then
+      used_hr=$(numfmt --to=iec --suffix=B --format="%.1f" "$used" 2>/dev/null || numfmt --to=iec "$used" 2>/dev/null || echo "$used")
+    else
+      used_hr=$used
+    fi
+    # Colorize: dataset and snapshot in WHITE, '@' separator in GREY
+    local ds_part snap_part colored_name
+    if [[ "$name" == *"@"* ]]; then
+      ds_part="${name%@*}"
+      snap_part="${name#*@}"
+      colored_name="${WHITE}${ds_part}${GREY}@${WHITE}${snap_part}${NC}"
+    else
+      colored_name="${WHITE}${name}${NC}"
+    fi
+    printf "%-50s %12s %20s\n" "$colored_name" "$used_hr" "$creation"
+  done
+}
+
+# Generate a plan that keeps only the newest N snapshots for a dataset.
+# For safety the generator only marks an older snapshot for deletion when
+# a consecutive `zfs diff <older> <newer>` produces no output (identical).
+function generate_max_snaps_plan() {
+  local dataset="$1"
+  local keep="$2"
+  # Optional 3rd arg: when set to '1' suppress the initial "Found N snapshots"
+  # message (used when a probe already printed this information).
+  local suppress_found_msg="${3:-0}"
+  local zfs_bin
+  if [[ -x /sbin/zfs ]]; then
+    zfs_bin="/sbin/zfs"
+  elif command -v zfs >/dev/null 2>&1; then
+    zfs_bin="$(command -v zfs)"
+  else
+    echo "zfs not found" >&2; return 1
+  fi
+
+  # Warn early if the current user may lack privileges for zfs operations
+  require_zfs_priv_for "zfs diff/list" "${dataset}" || true
+
+  local out_plan_review out_plan_exec
+  out_plan_review="${LOG_DIR}/${SFF_TMP_PREFIX}max_snaps_destroy_plan.sh.review"
+  out_plan_exec="${LOG_DIR}/${SFF_TMP_PREFIX}max_snaps_destroy_plan.sh"
+  : > "$out_plan_review"
+  : > "$out_plan_exec"
+  echo "#!/bin/bash" >> "$out_plan_exec"
+  echo "# Plan: keep newest ${keep} snapshots for ${dataset}" >> "$out_plan_review"
+  echo "# Plan: keep newest ${keep} snapshots for ${dataset}" >> "$out_plan_exec"
+
+  # collect all snapshots oldest->newest using creation sort
+  local -a snaps_all snaps
+  mapfile -t snaps_all < <("$zfs_bin" list -t snapshot -o name,creation -H -s creation "${dataset}" 2>/dev/null | awk '{print $1}')
+  local total_all=${#snaps_all[@]}
+  echo
+  if [[ "${suppress_found_msg}" != "1" ]]; then
+    echo "Found ${total_all} snapshots for ${dataset}" >&2
+  fi
+  if (( total_all == 0 )); then
+    echo "No snapshots found for ${dataset}" >&2
+    return 0
+  fi
+
+  # select the oldest 'keep' snapshots (or fewer if not enough)
+  local select_count=${keep}
+  if (( select_count > total_all )); then select_count=${total_all}; fi
+  snaps=("${snaps_all[@]:0:select_count}")
+
+  local deletions=0
+  local idx=0
+
+  while (( idx < ${#snaps[@]} - 1 )); do
+    local older newer outdiff
+    older=${snaps[$idx]}
+    newer=${snaps[$((idx+1))]}
+    outdiff=$(sff_zfs_diff "$older" "$newer" 2>/dev/null || true)
+    local _zdiff_rc=$?
+    if [[ ${_zdiff_rc:-0} -eq 0 && -z "$outdiff" ]]; then
+      # Annotate review file with commented reasoning and command
+      echo "# BECAUSE: identical to ${newer}" >> "$out_plan_review"
+      printf '# /sbin/zfs destroy "%s"\n' "$older" >> "$out_plan_review"
+      # Append executable destroy command (with annotation) to exec plan
+      echo "# BECAUSE: identical to ${newer}" >> "$out_plan_exec"
+      printf '/sbin/zfs destroy "%s"\n' "$older" >> "$out_plan_exec"
+      printf 'MAX_SNAPS_PLAN: %s marked for deletion (identical to %s)\n' "$older" "$newer" >> "${cmdlog_file}"
+      deletions=$((deletions+1))
+      # remove older from snaps array
+      snaps=("${snaps[@]:0:$idx}" "${snaps[@]:$((idx+1))}")
+      # do not advance idx so next pair checks new element at idx
+      continue
+    fi
+    idx=$((idx+1))
+  done
+
+  if (( deletions == 0 )); then
+    echo "No identical snapshot candidates found to reduce to ${keep}" >&2
+    # clean up empty plans
+    rm -f "$out_plan_review" "$out_plan_exec" 2>/dev/null || true
+  else
+    # Delegate plan file emission and printing to a shared helper so other
+    # flows can reuse the same output formatting and ZDIFF_STDERR handling.
+    emit_plan_files_and_print "$out_plan_review" "$out_plan_exec"
+  fi
+}
+
+# Emit generated plan files and print review + ZDIFF_STDERR blocks.
+# Args: <out_plan_review> <out_plan_exec>
+function emit_plan_files_and_print() {
+  local out_plan_review="$1"
+  local out_plan_exec="$2"
+  # make exec runnable
+  chmod +x "$out_plan_exec" 2>/dev/null || true
+  echo "Generated plans: review=${out_plan_review}  exec=${out_plan_exec}" >&2
+  echo
+  echo "--- Begin generated review plan: ${out_plan_review} ---" >&2
+  sed -n '1,99999p' "$out_plan_review" >&2 2>/dev/null || cat "$out_plan_review" >&2
+  echo "--- End generated review plan ---" >&2
+  echo
+  # Print all recorded ZDIFF_STDERR blocks from the per-run commands log in PINK
+  local zdiff_blocks=""
+  if [[ -f "${cmdlog_file}" ]]; then
+    zdiff_blocks=$(awk 'BEGIN{pos=0} /ZDIFF_STDERR:/{pos=NR} {lines[NR]=$0} END{ if(pos){ for(i=pos;i<=NR;i++){ if(i==pos) print lines[i]; else if(lines[i] ~ /^  /) print lines[i]; else break } } }' "${cmdlog_file}" 2>/dev/null || true)
+  fi
+  if [[ -n "${zdiff_blocks}" ]]; then
+    echo -e "${PINK}--- ZDIFF_STDERR blocks from ${cmdlog_file} ---${NC}" >&2
+    while IFS= read -r l; do echo -e "${PINK}${l}${NC}" >&2; done <<< "$zdiff_blocks"
+    echo -e "${PINK}--- end ZDIFF_STDERR blocks ---${NC}" >&2
+    # Attempt to surface actionable help for recognized errors by querying
+    # the modular zfs error handlers. Handlers expect a snippet; pass the
+    # zdiff_blocks content and print any returned help text in yellow.
+    if command -v zfs_error_query >/dev/null 2>&1; then
+      local _help_text
+      _help_text=$(zfs_error_query "$zdiff_blocks" 2>/dev/null || true)
+      if [[ -n "$_help_text" ]]; then
+        zfs_error_print_helper "$_help_text" "${cmdlog_file}" || true
+      fi
+    fi
+  fi
+  # If any zdiff errors occurred, print a clear fatal halt message and
+  # return so callers do not proceed to prompt for or attempt execution.
+  # If the commands log contains an ERROR_OCCURRED marker or any ZDIFF_STDERR
+  # blocks were printed above, treat the run as errored so prompts are suppressed.
+  if [[ -n "${zdiff_blocks}" ]] || { [ -f "${cmdlog_file}" ] && grep -q "^ERROR_OCCURRED:" "${cmdlog_file}" 2>/dev/null; }; then
+    ERROR_OCCURRED=1
+  fi
+  if [[ ${ERROR_OCCURRED:-0} -eq 1 ]]; then
+    echo -e "${RED}Halting: ZFS diff errors detected; aborting execution and prompts.${NC}" >&2
+    echo -e "${YELLOW}Inspect commands log: ${cmdlog_file}${NC}" >&2
+    return 0
+  fi
+  # After printing pink blocks (if any), print deferred red permission message (if any)
+  print_deferred_zfs_priv_msg
+}
+
+# Ensure datasets do not exceed MAX_SNAPS by generating a destroy plan for
+# the oldest snapshots beyond the requested keep count. This function only
+# generates plans (comment-first review + exec script) and logs the plan
+# to the per-run `commands.log`. It does not execute destroys; execution
+# remains gated by `ALLOW_DESTROY_SNAPS` and interactive confirmation.
+# Args: <dataset> <keep>
+function ensure_max_snaps_per_dataset() {
+  local dataset="$1" keep="$2"
+  if [[ -z "$dataset" || -z "$keep" ]]; then
+    return 1
+  fi
+  local zfs_bin
+  if [[ -x /sbin/zfs ]]; then
+    zfs_bin="/sbin/zfs"
+  elif command -v zfs >/dev/null 2>&1; then
+    zfs_bin="$(command -v zfs)"
+  else
+    echo -e "${YELLOW}zfs binary not found; cannot compute max-snaps for ${dataset}${NC}" >&2
+    return 1
+  fi
+
+  local -a snaps_all snaps
+  mapfile -t snaps_all < <("$zfs_bin" list -t snapshot -o name,creation -H -s creation "${dataset}" 2>/dev/null | awk '{print $1}')
+  local total_all=${#snaps_all[@]}
+  if (( total_all <= keep )); then
+    return 0
+  fi
+
+  local to_remove_count=$(( total_all - keep ))
+  snaps=("${snaps_all[@]:0:to_remove_count}")
+
+  local safe_name
+  safe_name=$(echo "${dataset}" | sed 's:[/ ]:_:g')
+  local out_plan_review="${LOG_DIR}/${SFF_TMP_PREFIX}maxsnaps_${safe_name}_${SHORT_TIMESTAMP}.review.sh"
+  local out_plan_exec="${LOG_DIR}/${SFF_TMP_PREFIX}maxsnaps_${safe_name}_${SHORT_TIMESTAMP}.exec.sh"
+
+  {
+    echo "# ${SFF_TMP_PREFIX}max-snaps destroy-plan review: ${out_plan_review}"
+    echo "# Dataset: ${dataset}  keep=${keep}  total=${total_all}  to_remove=${to_remove_count}"
+    echo "# Generated: ${SHORT_TIMESTAMP}"
+    echo
+  } > "$out_plan_review"
+
+  {
+    echo "#!/bin/bash"
+    echo "# Exec plan: remove oldest snapshots to enforce max-snaps=${keep} for ${dataset}"
+    echo
+  } > "$out_plan_exec"
+  chmod +x "$out_plan_exec" 2>/dev/null || true
+
+  local removed=0
+  for s in "${snaps[@]}"; do
+    echo "# Snapshot: ${s}" >> "$out_plan_review"
+    echo "# BECAUSE: exceeds max-snaps=${keep} (oldest candidate)" >> "$out_plan_review"
+    echo "# /sbin/zfs destroy ${s}" >> "$out_plan_review"
+    printf '/sbin/zfs destroy "%s"\n' "$s" >> "$out_plan_exec"
+    printf 'MAX_SNAPS_PLAN: %s marked for deletion (max-snaps keep=%s)\n' "$s" "$keep" >> "${cmdlog_file}" 2>/dev/null || true
+    removed=$((removed+1))
+  done
+
+  if (( removed > 0 )); then
+    echo "Generated max-snaps plan: review=${out_plan_review} exec=${out_plan_exec}" >&2
+    emit_plan_files_and_print "$out_plan_review" "$out_plan_exec"
+  else
+    rm -f "$out_plan_review" "$out_plan_exec" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Ensure datasets do not exceed MAX_SNAPS by generating a destroy plan for
+# the oldest snapshots beyond the requested keep count. This function only
+# generates plans (comment-first review + exec script) and logs the plan
+# to the per-run `commands.log`. It does not execute destroys; execution
+# remains gated by `ALLOW_DESTROY_SNAPS` and interactive confirmation.
+# Args: <dataset> <keep>
+function ensure_max_snaps_per_dataset() {
+  local dataset="$1" keep="$2"
+  if [[ -z "$dataset" || -z "$keep" ]]; then
+    return 1
+  fi
+  local zfs_bin
+  if [[ -x /sbin/zfs ]]; then
+    zfs_bin="/sbin/zfs"
+  elif command -v zfs >/dev/null 2>&1; then
+    zfs_bin="$(command -v zfs)"
+  else
+    echo -e "${YELLOW}zfs binary not found; cannot compute max-snaps for ${dataset}${NC}" >&2
+    return 1
+  fi
+
+  local -a snaps_all snaps
+  mapfile -t snaps_all < <("$zfs_bin" list -t snapshot -o name,creation -H -s creation "${dataset}" 2>/dev/null | awk '{print $1}')
+  local total_all=${#snaps_all[@]}
+  if (( total_all <= keep )); then
+    return 0
+  fi
+
+  # snapshots to consider for deletion: the oldest (total_all - keep)
+  local to_remove_count=$(( total_all - keep ))
+  snaps=("${snaps_all[@]:0:to_remove_count}")
+
+  local safe_name
+  safe_name=$(echo "${dataset}" | sed 's:[/ ]:_:g')
+  local out_plan_review="${LOG_DIR}/${SFF_TMP_PREFIX}maxsnaps_${safe_name}_${SHORT_TIMESTAMP}.review.sh"
+  local out_plan_exec="${LOG_DIR}/${SFF_TMP_PREFIX}maxsnaps_${safe_name}_${SHORT_TIMESTAMP}.exec.sh"
+
+  {
+    echo "# ${SFF_TMP_PREFIX}max-snaps destroy-plan review: ${out_plan_review}"
+    echo "# Dataset: ${dataset}  keep=${keep}  total=${total_all}  to_remove=${to_remove_count}"
+    echo "# Generated: ${SHORT_TIMESTAMP}"
+    echo
+  } > "$out_plan_review"
+
+  {
+    echo "#!/bin/bash"
+    echo "# Exec plan: remove oldest snapshots to enforce max-snaps=${keep} for ${dataset}"
+    echo
+  } > "$out_plan_exec"
+  chmod +x "$out_plan_exec" 2>/dev/null || true
+
+  local removed=0
+  for s in "${snaps[@]}"; do
+    echo "# Snapshot: ${s}" >> "$out_plan_review"
+    echo "# BECAUSE: exceeds max-snaps=${keep} (oldest candidate)" >> "$out_plan_review"
+    echo "# /sbin/zfs destroy ${s}" >> "$out_plan_review"
+    printf '/sbin/zfs destroy "%s"\n' "$s" >> "$out_plan_exec"
+    printf 'MAX_SNAPS_PLAN: %s marked for deletion (max-snaps keep=%s)\n' "$s" "$keep" >> "${cmdlog_file}" 2>/dev/null || true
+    removed=$((removed+1))
+  done
+
+  if (( removed > 0 )); then
+    echo "Generated max-snaps plan: review=${out_plan_review} exec=${out_plan_exec}" >&2
+    emit_plan_files_and_print "$out_plan_review" "$out_plan_exec"
+  else
+    rm -f "$out_plan_review" "$out_plan_exec" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Probe the oldest N snapshots and print which are redundant (identical to next)
+function probe_max_snaps() {
+  local dataset="$1"
+  local n="$2"
+  local zfs_bin
+  if [[ -x /sbin/zfs ]]; then
+    zfs_bin="/sbin/zfs"
+  elif command -v zfs >/dev/null 2>&1; then
+    zfs_bin="$(command -v zfs)"
+  else
+    echo "zfs not found" >&2; return 1
+  fi
+
+  # Warn early if the current user may lack privileges for zfs operations
+  require_zfs_priv_for "zfs diff/list" "${dataset}" || true
+
+  local -a snaps_all snaps
+  mapfile -t snaps_all < <("$zfs_bin" list -t snapshot -o name,creation -H -s creation "${dataset}" 2>/dev/null | awk '{print $1}')
+  local total_all=${#snaps_all[@]}
+  echo
+  echo "Found ${total_all} snapshots for ${dataset}" >&2
+  if (( total_all == 0 )); then
+    echo "No snapshots found for ${dataset}" >&2
+    return 0
+  fi
+
+  local select_count=${n}
+  if (( select_count > total_all )); then select_count=${total_all}; fi
+  snaps=("${snaps_all[@]:0:select_count}")
+
+  local -a redundant
+  local idx=0
+  local -a redundant_pairs
+  while (( idx < ${#snaps[@]} - 1 )); do
+    local older=${snaps[$idx]}
+    local newer=${snaps[$((idx+1))]}
+    local outdiff
+    outdiff=$(sff_zfs_diff "$older" "$newer" 2>/dev/null || true)
+    local _zdiff_rc=$?
+    if [[ ${_zdiff_rc:-0} -eq 0 && -z "$outdiff" ]]; then
+      redundant+=("$older")
+      redundant_pairs+=("${older}|${newer}")
+    fi
+    idx=$((idx+1))
+  done
+
+  if (( ${#redundant[@]} == 0 )); then
+    echo "No redundant snapshots detected among the oldest ${select_count} snapshots." >&2
+    echo "To generate a destroy plan for candidates run: snapshots-find-file -d ${dataset} --max-snaps ${n} --create-destroy-plan" >&2
+    echo "To apply a generated plan interactively, re-run with --clean-snapshots (and ensure ALLOW_DESTROY_SNAPS=1 in lib/common.sh)." >&2
+    return 0
+  fi
+
+  echo "Redundant snapshot candidates (older snapshots identical to their successor):" >&2
+  for s in "${redundant[@]}"; do
+    echo "  ${WHITE}${s}${NC}" >&2
+  done
+  # Print reproducible zfs diff commands so operators can re-run the exact
+  # comparison in another terminal to validate the script's assessment.
+  if (( ${#redundant_pairs[@]} > 0 )); then
+    echo "" >&2
+    echo "To reproduce this run the following command(s):" >&2
+    for p in "${redundant_pairs[@]}"; do
+      IFS='|' read -r _older _newer <<< "$p"
+      # Use the same zfs binary the script selected to ensure parity
+      echo "  ${zfs_bin} diff ${_older} ${_newer}" >&2
+    done
+  fi
+  echo "" >&2
+  echo "To preview destroy commands: snapshots-find-file -d ${dataset} --max-snaps ${n} --create-destroy-plan" >&2
+  echo "To apply after preview: snapshots-find-file -d ${dataset} --max-snaps ${n} --clean-snapshots" >&2
+
+  # If redundant candidates were found, offer to generate a plan now and optionally apply it.
+  if (( ${#redundant[@]} > 0 )); then
+    # If the user explicitly requested plan generation via CLI flags, skip
+    # interactive prompting here and return control to the caller which will
+    # generate the plan non-interactively. This ensures callers (including the
+    # main CLI flow) can decide whether to auto-generate after showing probe
+    # results.
+    if [[ ${REQUEST_SNAP_DELETE_PLAN:-0} -eq 1 ]]; then
+      return 0
+    fi
+
+    if prompt_confirm "Do you want to generate a destroy plan?" "n"; then
+      generate_max_snaps_plan "${dataset}" "${n}" 1
+      local out_plan_review out_plan_exec
+      out_plan_review="${LOG_DIR}/${SFF_TMP_PREFIX}max_snaps_destroy_plan.sh.review"
+      out_plan_exec="${LOG_DIR}/${SFF_TMP_PREFIX}max_snaps_destroy_plan.sh"
+      if [[ -f "${out_plan_review}" ]]; then
+        echo "Generated review plan: ${out_plan_review}" >&2
+        echo "Executable plan: ${out_plan_exec}" >&2
+        # If destroys are enabled in config, offer to apply now; otherwise just show and advise.
+        if [[ ${ERROR_OCCURRED:-0} -eq 1 ]]; then
+          echo -e "${RED}Errors detected during comparison; skipping execution prompt. Inspect ${cmdlog_file} for details.${NC}" >&2
+        else
+          if [[ "${ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
+            if prompt_confirm "Apply generated plan now?" "n"; then
+              echo -e "${YELLOW}Applying destroy plan: ${out_plan_exec}${NC}" >&2
+              bash "${out_plan_exec}" >> "${cmdlog_file}" 2>&1 || echo -e "${RED}Plan execution failed; check ${cmdlog_file}${NC}" >&2
+            else
+              echo "Plan generation complete. To apply later re-run with --clean-snapshots or run: bash ${out_plan_exec}" >&2
+            fi
+          else
+            echo -e "${YELLOW}Note: ALLOW_DESTROY_SNAPS is disabled (simulate mode); plan will not be applied automatically.${NC}" >&2
+            echo "Plan generation complete. Destroy plan written to: ${out_plan_exec} (simulate mode). To apply later enable ALLOW_DESTROY_SNAPS in lib/common.sh and re-run with --clean-snapshots, or run: bash ${out_plan_exec}" >&2
+          fi
+        fi
+      else
+        echo "Plan generation did not produce ${out_plan_review}" >&2
+      fi
+    fi
+  fi
 }
 
 # Helpers split from initialize_search_parameters to keep function sizes small
@@ -602,7 +1354,7 @@ function discover_datasets() {
     for ds in "${DATASETS[@]}"; do
       ds_disp+=("/${ds#/}")
     done
-    echo -e "Discovered datasets: ${WHITE}${ds_disp[*]}${NC}"
+    echo -e "v1: Discovered datasets: ${WHITE}${ds_disp[*]}${NC}"
   fi
 
   # Restore disabled globbing
@@ -816,7 +1568,51 @@ function sff_print_find_banner_once() {
   fi
 }
 
-# ZFS diff wrapper: normalizes names, retries on ordering or leading-slash errors,
+# Emit a run-vars summary at EXIT for auditing (mirrors the BEGIN dump).
+function show_run_vars_end() {
+  local logfile="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
+  # Mirror the END vars to stderr for interactive visibility (in addition to the commands log).
+  local _lbl
+  _lbl=$(verbose_label)
+  if [[ ${VVERBOSE:-0} -ge 1 ]]; then
+    echo -e "${_lbl} ${YELLOW}PID=${$} CREATE_DELETE_PLAN=${CREATE_DELETE_PLAN} ALLOW_DESTROY_SNAPS=${ALLOW_DESTROY_SNAPS} USE_ZDIFF=${USE_ZDIFF}${NC}" >&2
+    echo -e "${_lbl} ${YELLOW}SKIP_ZFS_FAST=${SKIP_ZFS_FAST:-0} LOG_DIR=${LOG_DIR} VVERBOSE=${VVERBOSE} VERBOSE=${VERBOSE} QUIET=${QUIET}${NC}" >&2
+  fi
+  # If we deferred a plan-generation notice earlier (admin disabled CREATE_DELETE_PLAN),
+  # print it now at the end of the run so it appears after dataset scanning and plan output.
+  if [[ ${NOTIFY_PLAN_GENERATION_IGNORED:-0} -eq 1 ]]; then
+    echo -e "${YELLOW}Note: Plan-generation request ignored because CREATE_DELETE_PLAN is disabled in configuration. Use --create-destroy-plan to request a plan; use --clean-snapshots to request execution when allowed.${NC}" >&2
+    echo
+  fi
+  {
+    printf 'RUN_VARS_END: %s\n' "$(date +"%Y-%m-%d %H:%M:%S")"
+    printf '  PID=%s\n' "$$"
+    printf '  CREATE_DELETE_PLAN=%s\n' "${CREATE_DELETE_PLAN}"
+    printf '  ALLOW_DESTROY_SNAPS=%s\n' "${ALLOW_DESTROY_SNAPS}"
+    printf '  USE_ZDIFF=%s\n' "${USE_ZDIFF}"
+    printf '  SKIP_ZFS_FAST=%s\n' "${SKIP_ZFS_FAST:-0}"
+    printf '  LOG_DIR=%s\n' "${LOG_DIR}"
+    printf '  VVERBOSE=%s VERBOSE=%s QUIET=%s\n' "${VVERBOSE}" "${VERBOSE}" "${QUIET}"
+  } >> "$logfile" 2>/dev/null || true
+
+  # When very-verbose mode is requested, mirror the per-run commands log
+  # to stderr so users see the full telemetry at the bottom of the run output.
+  if [[ ${VVERBOSE:-0} -ge 2 ]]; then
+    echo -e "${GREY}--- RUN COMMANDS LOG (start) ---${NC}" >&2
+    if [[ -f "$logfile" ]]; then
+      sed -n '1,99999p' "$logfile" >&2 2>/dev/null || true
+    fi
+    echo -e "${GREY}--- RUN COMMANDS LOG (end) ---${NC}" >&2
+  fi
+}
+
+# Register EXIT handler to print run summary variables
+trap show_run_vars_end EXIT
+ # ZFS stderr permission/error helpers live in lib/zfs_errors.sh
+ # (sourced above). They implement detection, snippet extraction and
+ # user-facing guidance. Report/printing helpers are available there.
+
+  # ZFS diff wrapper: normalizes names, retries on ordering or leading-slash errors,
 # logs the full output to the commands log, and prints the diff output to stdout
 # so callers may pipe it as before.
 function sff_zfs_diff() {
@@ -850,7 +1646,11 @@ function sff_zfs_diff() {
   local run_ts
   run_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
   echo "RUN: ${run_ts} $zfs_bin diff $a $b START_NS:$start_ns" >> "$logfile"
-  "$zfs_bin" diff "$a" "$b" >"$tmp" 2>&1 || true
+  # Capture stdout and stderr separately for diagnostics
+  local tmp_out tmp_err
+  tmp_out="${LOG_DIR}/${SFF_TMP_PREFIX}zfs-diff.out"
+  tmp_err="${LOG_DIR}/${SFF_TMP_PREFIX}zfs-diff.err"
+  "$zfs_bin" diff "$a" "$b" >"$tmp_out" 2>"$tmp_err" || true
   local st=$?
   end_ns=$(date +%s%N 2>/dev/null || echo 0)
   if [[ $start_ns -ne 0 && $end_ns -ne 0 ]]; then
@@ -858,49 +1658,107 @@ function sff_zfs_diff() {
   else
     dur_ms=0
   fi
-  cat "$tmp" >> "$logfile"
+  # Log stdout and stderr separately with clear markers
+  if [[ -s "$tmp_out" ]]; then
+    printf 'ZDIFF_STDOUT: %s\n' "$(date +"%Y-%m-%d %H:%M:%S")" >> "$logfile" 2>/dev/null || true
+    sed 's/^/  /' "$tmp_out" >> "$logfile" 2>/dev/null || true
+  fi
+  if [[ -s "$tmp_err" ]]; then
+    printf 'ZDIFF_STDERR: %s (exit:%s)\n' "$(date +"%Y-%m-%d %H:%M:%S")" "$st" >> "$logfile" 2>/dev/null || true
+    sed 's/^/  /' "$tmp_err" >> "$logfile" 2>/dev/null || true
+    # Inspect stderr for known ZFS errors and report guidance (modular handlers)
+    zfs_error_handle_from_file "$tmp_err" "$logfile" || true
+    # Any captured stderr from zfs diff is considered a run-level error
+    # that should halt further destructive prompts until inspected.
+    ERROR_OCCURRED=1
+  fi
+  # If zfs exited success but produced no stdout and wrote explanatory stderr
+  # (e.g., delegated permission preventing just-in-time snapshots), treat
+  # this as a functional failure so callers (probes) don't mark zdiff as usable.
+  if [[ $st -eq 0 && ! -s "$tmp_out" && -s "$tmp_err" ]]; then
+    # Read a short snippet of stderr to match common failure phrases.
+    local _err_snip
+    _err_snip=$(head -n 5 "$tmp_err" 2>/dev/null || true)
+    if echo "$_err_snip" | grep -qiE "unable to generate diffs|delegated permission|permission"; then
+      printf 'ZDIFF_STDERR_NOTE: %s (interpreting as failure)\n' "$(date +"%Y-%m-%d %H:%M:%S")" >> "$logfile" 2>/dev/null || true
+      st=2
+      # permission-like stderr detected: invoke modular handler
+      zfs_error_handle_from_file "$tmp_err" "$logfile" || true
+    fi
+  fi
   local end_ts
   end_ts=$(date +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date)
   echo "EXIT:${st} END:${end_ts} DURATION_MS:${dur_ms}" >> "$logfile"
 
+  # If the zfs diff exited non-zero or we forced st>0 due to stderr notes,
+  # mark that an error occurred so callers can suppress destructive prompts.
+  if [[ ${st:-0} -ne 0 ]]; then
+    ERROR_OCCURRED=1
+    printf 'ERROR_OCCURRED: %s EXIT:%s DURATION_MS:%s\n' "${end_ts}" "${st}" "${dur_ms}" >> "$logfile" 2>/dev/null || true
+  fi
+
   if [[ $st -ne 0 ]]; then
-    local out
-    out=$(cat "$tmp")
-    if echo "$out" | grep -qi "leading slash"; then
-      "$zfs_bin" diff "${a#/}" "${b#/}" >"$tmp" 2>&1
+    # Read combined outputs for heuristic checks
+    local combined
+    combined=""
+    [[ -f "$tmp_out" ]] && combined+=$(cat "$tmp_out")
+    [[ -f "$tmp_err" ]] && combined+=$(printf "\n"; cat "$tmp_err")
+    if echo "$combined" | grep -qi "leading slash"; then
+      # retry with stripped leading slashes
+      "$zfs_bin" diff "${a#/}" "${b#/}" >"$tmp_out" 2>"$tmp_err" || true
       st=$?
       end_ns=$(date +%s%N 2>/dev/null || echo 0)
       dur_ms=$(( (end_ns - start_ns) / 1000000 ))
-      {
-        echo "RETRY(strip) RUN: $zfs_bin diff ${a#/} ${b#/} DURATION_MS:$dur_ms"
-        cat "$tmp"
-        echo "RETRY(strip) EXIT:$st DURATION_MS:$dur_ms"
-      } >> "$logfile"
+      printf 'RETRY(strip) RUN: %s DURATION_MS:%s\n' "$zfs_bin diff ${a#/} ${b#/}" "$dur_ms" >> "$logfile"
+      if [[ -s "$tmp_out" ]]; then sed 's/^/  /' "$tmp_out" >> "$logfile"; fi
+      if [[ -s "$tmp_err" ]]; then sed 's/^/  /' "$tmp_err" >> "$logfile"; fi
+      printf 'RETRY(strip) EXIT:%s DURATION_MS:%s\n' "$st" "$dur_ms" >> "$logfile"
     fi
     if [[ $st -ne 0 ]]; then
-      out=$(cat "$tmp")
-      if echo "$out" | grep -qi "Not an earlier snapshot"; then
-        "$zfs_bin" diff "$b" "$a" >"$tmp" 2>&1
+      combined=""
+      [[ -f "$tmp_out" ]] && combined+=$(cat "$tmp_out")
+      [[ -f "$tmp_err" ]] && combined+=$(printf "\n"; cat "$tmp_err")
+      if echo "$combined" | grep -qi "Not an earlier snapshot"; then
+        "$zfs_bin" diff "$b" "$a" >"$tmp_out" 2>"$tmp_err" || true
         st=$?
         end_ns=$(date +%s%N 2>/dev/null || echo 0)
         dur_ms=$(( (end_ns - start_ns) / 1000000 ))
-        {
-          echo "RETRY(swap) RUN: $zfs_bin diff $b $a DURATION_MS:$dur_ms"
-          cat "$tmp"
-          echo "RETRY(swap) EXIT:$st DURATION_MS:$dur_ms"
-        } >> "$logfile"
+        printf 'RETRY(swap) RUN: %s DURATION_MS:%s\n' "$zfs_bin diff $b $a" "$dur_ms" >> "$logfile"
+        if [[ -s "$tmp_out" ]]; then sed 's/^/  /' "$tmp_out" >> "$logfile"; fi
+        if [[ -s "$tmp_err" ]]; then sed 's/^/  /' "$tmp_err" >> "$logfile"; fi
+        printf 'RETRY(swap) EXIT:%s DURATION_MS:%s\n' "$st" "$dur_ms" >> "$logfile"
       fi
     fi
   fi
 
   # Emit the diff output to stdout for callers to consume
-  cat "$tmp"
+  # Emit the stdout output to stdout for callers to consume
+  if [[ ${VVERBOSE:-0} -ge 1 ]]; then
+    # Verbose: print zdiff stdout/stderr to the console for visibility
+    if [[ -f "$tmp_out" && -s "$tmp_out" ]]; then
+      cat "$tmp_out"
+    fi
+    if [[ -f "$tmp_err" && -s "$tmp_err" ]]; then
+      # send stderr content to stderr so it is visually distinct
+      cat "$tmp_err" >&2
+    fi
+  else
+    if [[ -f "$tmp_out" ]]; then
+      cat "$tmp_out"
+    fi
+  fi
   # If successful, record zdiff usage marker
   if [[ $st -eq 0 ]]; then
     echo "ZDIFF_USED: ${end_ts} $a $b DURATION_MS:${dur_ms}" >> "$logfile"
     # Informational on stderr for interactive runs
     echo -e "${CYAN}zdiff: $a -> $b took ${dur_ms}ms${NC}" >&2
+      # If combined stderr/stdout shows permission-like issues, report them
+      if echo "$combined" | grep -qiE "permission|permission denied|delegat|delegated|just[- ]?in[- ]?time|unable to generate diffs|not allowed"; then
+        zfs_error_handle_from_file "$tmp_err" "$logfile" || true
+      fi
+  else
+    echo "ZDIFF_FAILED: ${end_ts} $a $b EXIT:${st} DURATION_MS:${dur_ms}" >> "$logfile"
   fi
-  rm -f "$tmp" || true
+  rm -f "$tmp_out" "$tmp_err" || true
   return $st
 }

@@ -35,11 +35,60 @@ Flags of interest:
  - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
  - `--force-find` : force legacy `find` usage for testing/debugging (skips the `zfs diff` fast-path)
 
+- `--max-snaps <n>`, `-m <n>` : snapshot-pruning probe. When invoked against `-d <dataset>` the tool inspects the oldest `<n>` snapshots (oldest→newest), compares consecutive pairs using `zfs diff`, and reports older snapshots that are identical to their immediate successor (candidates for deletion). This flag is intended to be used without `-c` (no live-dataset compare required). Use with `--create-destroy-plan` to generate a reviewable destroy plan or with `--clean-snapshots` to request applying the generated plan (still gated by the master `ALLOW_DESTROY_SNAPS` guard in `lib/common.sh`).
+
+Utility flags (non-destructive):
+
+- `--show-space`, `-S` : show ZFS dataset/pool available space with `zfs list -o name,avail`. Requires `-d` dataset argument to target a specific dataset (otherwise lists recursively under configured dataset path).
+- `--list-largest`, `-l` : list largest snapshots for the target dataset using `zfs list -t snapshot -o name,used,creation` sorted by `used`. Requires `-d`.
+- `--max-depth <n>` : when listing matching files or differences, show parent directories truncated to `<n>` path components (deduplicated). Useful to inspect top-level parent dirs before drilling into child files.
+
 By default the tool is conservative: it will not perform destructive actions
 unless explicitly enabled in the configuration file `lib/common.sh` (the
 permanent guard variable `ALLOW_DESTROY_SNAPS` must be manually enabled).
 
 ## Safety and workflow
+
+## Prerequisites
+
+- ZFS delegated permission for `zfs diff` (optional, recommended for some compare flows):
+
+  When the tool prefers the `zfs diff` (zdiff) fast-path to compare snapshots
+  to live data, `zfs` may attempt to create a just-in-time snapshot of the live
+  dataset. If the user running the command does not have permission to create
+  snapshots on the target dataset, `zfs diff` can produce a short explanatory
+  stderr message such as:
+
+  ```
+  The diff delegated permission is needed in order to create a just-in-time snapshot for diffing : unable to generate diffs
+  ```
+
+  To avoid this, grant the delegated permission to the user (scoped to a
+  dataset or the pool). In many environments granting the `snapshot` right is
+  sufficient so `zfs` can create the just-in-time snapshot used for diffs.
+  For example, as an administrator:
+
+  ```bash
+  # Grant permission to create snapshots (commonly required for live->snapshot diffs)
+  sudo zfs allow <username> snapshot pool/dataset
+
+  # Alternatively, grant the diff verb directly (accepts JIT snapshot behavior)
+  sudo zfs allow <username> diff pool/dataset
+
+  # Or scoped at the pool level:
+  sudo zfs allow <username> snapshot pool
+  ```
+
+  Notes:
+  - This is optional. The tool will still attempt to use `zfs diff` in many
+    cases and will fall back to the legacy `find`-based inventory when `zfs`
+    is unavailable or lacks permission for a particular dataset. Fallback
+    reasons and diagnostics are recorded in the per-run `sff_commands.log`.
+  - Granting `diff` permission gives the user the ability to perform snapshot
+    diffs (including creating temporary snapshots as needed). If you prefer
+    not to delegate permissions, run the tool with `sudo` for those runs or
+    allow the tool to fall back to `find`.
+
 
 - The tool generates a destroy plan (`sff_destroy-plan-<timestamp>.sh`) and
   prints suggested removals as "WOULD delete" lines by default.
@@ -127,6 +176,23 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 
 ```bash
 ./snapshots-find-file -z -v -d pool/dataset -s "*" -f "*.html"
+```
+
+- Probe oldest N snapshots for redundancy (no `-c` required):
+
+```bash
+# Probe the oldest 4 snapshots and report redundant older snapshots
+./snapshots-find-file -d /nas/live/rnap -m 4
+```
+
+# Plan-only: generate a destroy plan from the redundant candidates found among the oldest N snapshots
+```bash
+./snapshots-find-file -d /nas/live/rnap -m 4 --create-destroy-plan
+```
+
+# Apply (request) the generated plan (still gated by ALLOW_DESTROY_SNAPS in lib/common.sh)
+```bash
+./snapshots-find-file -d /nas/live/rnap -m 4 --clean-snapshots
 ```
 
 - Generate a destroy plan (plan-only):

@@ -128,7 +128,7 @@ function _csfld_check_path() {
       fi
       # Send verbose ignore notices to stderr so stdout remains clean for
       # the numeric counters returned by the prepare-and-run helper.
-      [[ $VERBOSE == 1 ]] && echo -e "${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}" >&2
+      [[ $VERBOSE == 1 ]] && echo -e "v1: ${YELLOW}Ignoring (matches pattern): $live_equivalent_path (Pattern: '$pattern')${NC}" >&2
       printf '%s' "IGNORED"
       return 0
     fi
@@ -277,7 +277,7 @@ function _csfld_prepare_and_run() {
 
   # Always send gathering/info messages to stderr so callers capturing stdout
   # only receive the data payload (temp file paths and final counters).
-  [[ $VERBOSE == 1 ]] && echo -e "${CYAN}Gathering live dataset files from: ${WHITE}$live_dataset_path${NC}" >&2
+  [[ $VERBOSE == 1 ]] && echo -e "v1: ${CYAN}Gathering live dataset files from: ${WHITE}$live_dataset_path${NC}" >&2
   local live_files_tmp
   live_files_tmp=$(_gather_live_files "$live_dataset_path" "$tmp_base")
 
@@ -465,7 +465,7 @@ function _lsd_process_dataset() {
   local dataset="$1"
   local delta_log_file="$2"
 
-  [[ $VERBOSE == 1 ]] && echo -e "\n${PURPLE}Analyzing deltas for dataset: ${WHITE}$dataset${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "v1: \n${PURPLE}Analyzing deltas for dataset: ${WHITE}$dataset${NC}"
   echo "--- Dataset: $dataset ---" >> "$delta_log_file"
 
   local -a all_compare_points=()
@@ -482,7 +482,7 @@ function _lsd_process_dataset() {
     local comparison_context="${parent_compare_point} to ${current_compare_point}"
 
     printf "\n--- Delta for: %s (compared to %s) ---\n" "${current_compare_point}" "${parent_compare_point}" >> "$delta_log_file"
-    [[ $VERBOSE == 1 ]] && echo -e "  ${YELLOW}Comparing ${WHITE}${current_compare_point} ${YELLOW}to ${WHITE}${parent_compare_point}${NC}"
+    [[ $VERBOSE == 1 ]] && echo -e "v1:   ${YELLOW}Comparing ${WHITE}${current_compare_point} ${YELLOW}to ${WHITE}${parent_compare_point}${NC}"
 
     _process_diff_pair "$parent_compare_point" "$current_compare_point" "$delta_log_file"
   done

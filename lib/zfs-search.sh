@@ -39,12 +39,13 @@ function _handle_noncompare_snapdir() {
   local found_tmp
   found_tmp=$(mktemp "${tmp_base}/found_files.XXXXXX")
 
-  vlog "dataset=${dataset} snappath=${snappath}"
+  vlog "dataset=${WHITE}${dataset}${NC} snappath=${WHITE}${snappath}${NC}"
 
   # shellcheck disable=SC2024
   # Announce using legacy find (deduped) and record in commands log for traceability
   sff_print_find_banner_once "$dataset" "non-compare snapshot scan"
-  /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null > "$found_tmp"
+  # Use sudo+tee to avoid shell redirection being performed as non-root
+  /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | /bin/sudo tee "$found_tmp" >/dev/null
   if [[ -s "$found_tmp" ]]; then
     local _quiet_notice_printed=0
     while IFS= read -r -d '' file; do
@@ -126,24 +127,24 @@ function _process_snappath() {
   local dataset_name="$1"; shift
 
   if [[ ! -d "$snappath" ]]; then
-    [[ $VERBOSE == 1 ]] && echo -e "(${YELLOW}No Snapshots found in this dataset${NC})"
+    [[ $VERBOSE == 1 ]] && echo -e "v1: (${YELLOW}No Snapshots found in this dataset${NC})"
     return 0
   fi
 
-  vlog "dataset=${dataset} ds_path=${ds_path} snappath=${snappath}"
+  vlog "dataset=${WHITE}${dataset}${NC} ds_path=${WHITE}${ds_path}${NC} snappath=${WHITE}${snappath}${NC}"
 
   local SNAPNAME
   SNAPNAME=$(/bin/basename "$snappath")
-  [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "Skipping symlink: ${snappath}" && return 0
+  [ -L "${snappath%/}" ] && [[ $VERBOSE == 1 ]] && echo "v1: Skipping symlink: ${snappath}" && return 0
 
-  [[ $VERBOSE == 1 ]] && echo -e "Scanning snapshot:(${WHITE}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
+  [[ $VERBOSE == 1 ]] && echo -e "v1: Scanning snapshot:(${WHITE}$SNAPNAME${NC}) for files matching '${YELLOW}$FILESTR${NC}'"
 
   if ! _matches_snapshot_regex "$SNAPNAME"; then
-    [[ $VERBOSE == 1 ]] && echo "Skipping, doesn't match -s regex"
+    [[ $VERBOSE == 1 ]] && echo "v1: Skipping, doesn't match -s regex"
     return 0
   fi
 
-  [[ $VERBOSE == 1 ]] && echo -e "Search path:(${CYAN}$snappath${NC})"
+  [[ $VERBOSE == 1 ]] && echo -e "v1: Search path:(${CYAN}$snappath${NC})"
 
   ##
   # NEW FUNCTIONALITY MODIFICATION BEGIN: Conditional find command execution & bugfix
@@ -157,7 +158,29 @@ function _process_snappath() {
     local full_snap_id="${dataset_name}@${SNAPNAME_local}"
     local creation_time_epoch
     creation_time_epoch=$(zfs get -Hp creation "$full_snap_id" | awk 'NR==2{print $3}')
-    _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME_local" "$creation_time_epoch"
+    # Prefer zfs diff fast-path for compare runs when requested. If zdiff
+    # produces no output or fails, fall back to the legacy find pipeline.
+    if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
+      local full_snap_id_2
+      full_snap_id_2="$full_snap_id"
+      # sff_zfs_diff emits tab-separated diff lines; capture them for parsing.
+      mapfile -t diff_output < <(sff_zfs_diff "$full_snap_id_2" "$dataset_name" 2>/dev/null)
+      if [[ ${#diff_output[@]} -gt 0 ]]; then
+            for line in "${diff_output[@]}"; do
+              local path="${line:2}"
+          # normalize leading slash from paths to match find-style output
+          path="${path#/}"
+          # write a line compatible with compare pipeline: live_equivalent_path|snap_name|creation_time_epoch
+          printf '%s|%s|%s\n' "${dataset}${path}" "${SNAPNAME_local}" "${creation_time_epoch}" >> "$all_snapshot_files_found_tmp"
+        done
+      else
+        sff_print_find_banner_once "$dataset" "zdiff produced no output or failed for this snapshot; falling back to find"
+        /bin/sudo /bin/find "$snappath" -type f \( "${FILEARR[@]}" \) -print0 2>/dev/null | \
+          xargs -0 -I {} bash -c "echo \"\$1\${5#\$2}|\$3|\$4\"" _ "${dataset}" "${snappath}" "${SNAPNAME_local}" "${creation_time_epoch}" "{}" >> "$all_snapshot_files_found_tmp"
+      fi
+    else
+      _handle_compare_snapdir "$snappath" "$dataset" "$dataset_name" "$SNAPNAME_local" "$creation_time_epoch"
+    fi
   else
     # Prefer zfs diff fast-path for non-compare runs when requested.
     if [[ "${USE_ZDIFF:-0}" -eq 1 && "${SKIP_ZFS_FAST:-0}" -ne 1 ]]; then
@@ -166,11 +189,10 @@ function _process_snappath() {
       mapfile -t diff_output < <(sff_zfs_diff "$full_snap_id" "$dataset_name" 2>/dev/null)
       if [[ ${#diff_output[@]} -eq 0 ]]; then
         # Fallback to legacy find when zdiff produced no output or failed
-        sff_print_find_banner_once "$dataset" "zdiff not available for snapshot"
+        sff_print_find_banner_once "$dataset" "zdiff produced no output or failed for this snapshot; falling back to find"
         _handle_noncompare_snapdir "$snappath" "$dataset"
       else
         for line in "${diff_output[@]}"; do
-          local type="${line:0:1}"
           local path="${line:2}"
           # normalize leading slash from paths to match find-style output
           path="${path#/}"
@@ -199,15 +221,15 @@ function _path_matches_filearr() {
   while [[ $i -lt ${#FILEARR[@]} ]]; do
     local key="${FILEARR[$i]}"
     local val="${FILEARR[$((i+1))]:-}"
-    if [[ "$key" == "-name" ]]; then
+      if [[ "$key" == "-name" ]]; then
       local base
       base="${path##*/}"
-      if [[ "$base" == $val ]]; then
+      if [[ "$base" == "$val" ]]; then
         return 0
       fi
     elif [[ "$key" == "-path" ]]; then
       # patterns in FILEARR for -path were built with leading/trailing '*' as needed
-      if [[ "$path" == $val ]]; then
+      if [[ "$path" == "$val" ]]; then
         return 0
       fi
     fi
@@ -218,7 +240,7 @@ function _path_matches_filearr() {
 
 function process_snapshots_for_dataset() {
   local dataset="$1"
-  vlog "START dataset=${dataset}"
+  vlog "START dataset=${WHITE}${dataset}${NC}"
   _psfd_init "$dataset"
   if ! _psfd_should_process "$dataset"; then
     return
@@ -231,8 +253,8 @@ function _psfd_init() {
   local dataset="$1"
   IFS='|' read -r PSFD_ds_path PSFD_dataset_name < <(_normalize_dataset "$dataset")
   export PSFD_ds_path PSFD_dataset_name
-  [[ $VERBOSE == 1 ]] && echo -e "Processing dataset: ${WHITE}$PSFD_dataset_name${NC} (path: ${WHITE}$PSFD_ds_path${NC})"
-  [[ $VERBOSE == 1 ]] && echo -e "${GREY}Using ZFSSNAPDIR: $ZFSSNAPDIR${NC}"
+  [[ $VERBOSE == 1 ]] && echo -e "v1: Processing dataset: ${WHITE}$PSFD_dataset_name${NC} (path: ${WHITE}$PSFD_ds_path${NC})"
+  [[ $VERBOSE == 1 ]] && echo -e "v1: ${GREY}Using ZFSSNAPDIR: $ZFSSNAPDIR${NC}"
   PSFD_dataset_start_count=${found_files_count:-0}
   PSFD_snapshot_found=0
 }

@@ -1,170 +1,43 @@
- # Snapshot Reducer — Product Requirements Document (PRD)
+# Snapshot Reducer — Product Requirements Document (PRD)
 
- ## Overview
- Snapshot Reducer manages the safe discovery, comparison, and conservative deletion of ZFS snapshots to ensure that files existing only in snapshots are never accidentally destroyed. It provides snapshot file search, dataset comparison, and planned cleanup workflows.
-
- ---
-
- ## Purpose
- - Storage optimization: reduce wasted space by identifying redundant or obsolete ZFS snapshots.
- - Safety focus: prevent deleting snapshots that uniquely contain files missing from live datasets.
- - Traceability: produce deterministic, logged, reviewable output artifacts for all operations.
-
- ---
-
- ## Principal Product Requirements
- - Safety-first deletion: all destructive operations must be two-step (plan-first, apply-second) and peer-reviewed.
- - Canonical evidence: each run writes machine-readable evidence files following the `SFF_TMP_PREFIX` convention:
-   - `sff_acc_deleted-<timestamp>.csv` — records `snapshot|path` rows.
-   - `sff_snap_holding-<timestamp>.txt` — lists protected snapshot IDs.
- - Cleanup evidence use: the cleanup stage must cross-check evidence before proposing any deletions.
- - Verbose tracing: support `-v` and `-vv` with `vlog()` auto-prefixes and route logs to `stderr`.
- - Quiet mode: `-q` suppresses per-file lines while retaining summary and logs.
- - Clean outputs: CSV and canonical artifacts contain no ANSI escapes or color traces.
- - Master guard: `ALLOW_DESTROY_SNAPS` remains `0` by default and requires manual edit for activation.
- - Maintainability: limit functions to ~60 lines; flag overlong functions during audits.
- - Preserve documentation: retain all original comments and help text during refactors.
-
- ---
-
- ## Developer Workflow Notes
- - Split functions bigger than 60 lines into helpers.
- - Move all shared logic to `lib/common.sh`.
- - Avoid relying on environment variables for feature control.
- - Redirect command output to logs for later inspection (`> out.log 2>&1`).
- - Keep comments immediately above the code or block they document.
- - Before editing, review `copilot-context.md`.
-
- ---
-
- ###########################################
- ## PHASE 1
- ####
- **PHASE 1 — Cataloging and Code Audit (Status: ✅ Complete)**
- **Date:** 2025-12-10
-
- Scope
- - Inspect and catalog code across `snapshots-find-file` and `lib/*.sh`.
- - No behavioral or functional changes during this phase.
-
- Goals
- - Enforce DRY principles: use `lib/common.sh` as the shared utility hub.
- - Identify redundant or misplaced logic for refactor.
- - Catalog all functions, file locations, and line counts.
- - Ensure all actions are read-only and non-destructive.
-
- Constraints
- - Target environment: Linux with `zfs`, `find`, `xargs`, and `sudo`.
-
- Repository inspection summary
- - Entry script: `snapshots-find-file` — orchestration only.
- - Core libraries:
-   - `lib/common.sh` — parsing, constants, helpers.
-   - `lib/zfs-search.sh` — `process_snapshots_for_dataset()`.
-   - `lib/zfs-compare.sh` — comparison helpers.
-   - `lib/zfs-cleanup.sh` — cleanup logic.
-Implementation plan
-
-This merged plan covers both the docs-first rename (minor) and the major snapshot-pruning feature set (promoting `zfs diff` in non-compare flows) and incorporates the operator-facing safety checks required before any destroy plan is applied.
-
-Core tasks
-
-1. Audit and rename (docs-first)
-  - Replace plan-generation usages with `--create-destroy-plan` (`-p`) in docs/tests and examples; update any references to `--clean-snapshots` so it requests execution of a generated plan rather than acting as the canonical plan flag.
-  - Update `readme.md`, `PRD.md`, and examples to reflect the distinct semantics: `--create-destroy-plan` = plan-only, `--clean-snapshots` = request execution (still gated by `ALLOW_DESTROY_SNAPS`).
-
-2. Snapshot-pruning safety checks (behavioral specification, docs-first)
-  - Comparison approach: compare adjacent snapshots using `sff_zfs_diff dataset@old dataset@new`. Empty zdiff output with exit 0 marks `old` as a candidate.
-  - Pre-delete checks for every candidate:
-    - `zfs holds -H <snap>` — must be empty.
-    - `zfs get -H -o value clones <snap>` — must be `-` or empty.
-    - Verify no bookmarks or replication references (manual/tooling audit; record findings).
-  - Policy rules (configurable): keep at least one snapshot in identical runs (defaults to newest), optional `--min-age DAYS`, and optional requirement for multi-neighbor identical confirmation.
-  - Always generate an annotated destroy plan (dry-run) with `# BECAUSE:` and `# CHECK:` lines describing why each snapshot is a candidate and what checks passed/failed.
-
-3. Opt-in `zfs diff` integration (non-destructive initially)
-  - Wire `-z` / `--zfs-diff` into non-compare flows and pruning paths so `sff_zfs_diff` is used when requested.
-  - Implement per-dataset fallback: if `sff_zfs_diff` fails or returns an error, fall back to legacy `find` for that dataset and log the fallback reason in `commands.log` (no silent failures).
-  - Write per-dataset zdiff outputs and check summaries under the run `LOG_DIR` for operator review.
-
-4. Verbosity, operator audit UX, and color conventions
-  - `-p` default: concise summary of candidate counts and top-level reasons (stderr). Machine outputs (CSV/plan) remain colorless.
-  - `-p -v`: include per-candidate pre-delete check summaries (holds/clones status, zdiff-exit, log paths).
-  - `-p -vv`: include inline links/paths to zdiff outputs and full logs under `LOG_DIR` (or inline excerpts if explicitly requested).
-  - Color mapping: collect operator preferences and document (datasets/snapshots white, files green, warnings yellow, critical markers pink reserved).
-
-5. Parity verification, tests-first
-  - Add deterministic fixture-driven smoke tests that compare `-z` vs legacy `find` for representative datasets; assert equality of summary CSVs and candidate lists.
-  - Implement bench harness (`lib/zfs-bench.sh`) runs in CI to detect regressions and measure performance differences.
-
-6. Promotion and rollout (gated)
-  - After parity tests pass and operator review, promote `zfs diff` to preferred default for non-compare runs; add `--no-zdi` opt-out if needed.
-  - Keep `ALLOW_DESTROY_SNAPS` master guard unchanged; applying any generated plan still requires `ALLOW_DESTROY_SNAPS=1` + interactive confirmation.
-
-Acceptance criteria
-
-- Docs updated to reference `--create-destroy-plan` as the plan-only flag and `--clean-snapshots` as the execution-request flag (documentation and examples updated accordingly).
-- Snapshot-pruning flow performs zdiff comparisons, runs holds/clones/bookmark/replication checks, records all artifacts under `LOG_DIR`, and writes annotated destroy plans (dry-run).
-- Parity fixtures show identical summary artifacts between `zfs diff` and `find` flows before any promotion to default.
-- No destructive action occurs without the master guard and interactive confirmation.
-
-Operator audit & suggested verification commands
-
-- The tool must print the exact `sff_zfs_diff` command used and the zdiff output path under `LOG_DIR` for each candidate; suggested verification command:
-  - `sff_zfs_diff pool/dataset@old pool/dataset@new | less`
-- For holds/clones checks provide explicit commands in the plan output:
-  - `zfs holds -H pool/dataset@<snap>`
-  - `zfs get -H -o value clones pool/dataset@<snap>`
-
-Recommendation
-
-Merge these docs-first changes into `PRD.md` now. After your approval I will:
-  - Create a feature branch and implement the opt-in `-z` wiring with per-dataset fallbacks.
-  - Add fixture-driven parity tests and bench harness runs in CI.
-  - Present a demo and test results for operator sign-off before flipping defaults.
-
-----
-
-3. Generate cleanup plan (dry-run)
-  - Run:
-    ```bash
-    snapshots-find-file --create-destroy-plan -d <dataset> -s <snap-regex> -f <file-pattern>
-    ```
-  - Validate output:
-    - Each destroy candidate includes `# BECAUSE:` and `# Command:` details.
-    - `sff_destroy-plan-<ts>.sh` is comment-first and reviewable.
-
-4. Audit checks
-  - Verify `commands.log` contains per-dataset `sff_zfs_diff`/`zfs diff` invocations and per-dataset zdiff output paths.
-
-Operational notes
- - `REQUEST_ALLOW_DESTROY_SNAPS=1` enables confirmation prompts but cannot bypass the master guard.
- - Logs (`comparison-*.out`) are auto-compressed for older runs.
-
-Developer workflow
- - Operators run commands locally and share resulting logs for parsing; the agent does not execute remote commands.
- - Example:
-  ```bash
-  bash tests/run_smoke_tests.sh > /tmp/sff_smoke.log 2>&1
-  ```
-
-Acceptance criteria
- - No snapshot listed in any `sff_acc_deleted*` file is proposed for deletion.
- - Machine-readable outputs validate correctly and omit ANSI codes.
- - All destroy plans begin with reviewed, comment-first sections.
-
-Next steps
- - Re-run function-length audit and refactor any remaining long blocks before the next release cycle.
-
- ---
-
- ###########################################
- ## PHASE 3.1
- ####
+## Overview
+Snapshot Reducer manages the safe discovery, comparison, and conservative deletion of ZFS snapshots to ensure that files existing only in snapshots are never accidentally destroyed. It provides snapshot file search, dataset comparison, and planned cleanup workflows.
 
 ---
 
-# PHASE 1 — Cataloging and Code Audit (Status: ✅ Complete)
+## Purpose
+- Storage optimization: reduce wasted space by identifying redundant or obsolete ZFS snapshots.
+- Safety focus: prevent deleting snapshots that uniquely contain files missing from live datasets.
+- Traceability: produce deterministic, logged, reviewable output artifacts for all operations.
+
+---
+
+## Principal Product Requirements
+- Safety-first deletion: all destructive operations must be two-step (plan-first, apply-second) and peer-reviewed.
+- Canonical evidence: each run writes machine-readable evidence files following the `SFF_TMP_PREFIX` convention:
+  - `sff_acc_deleted-<timestamp>.csv` — records `snapshot|path` rows.
+  - `sff_snap_holding-<timestamp>.txt` — lists protected snapshot IDs.
+- Cleanup evidence use: the cleanup stage must cross-check evidence before proposing any deletions.
+- Verbose tracing: support `-v` and `-vv` with `vlog()` auto-prefixes and route logs to `stderr`.
+- Quiet mode: `-q` suppresses per-file lines while retaining summary and logs.
+- Clean outputs: CSV and canonical artifacts contain no ANSI escapes or color traces.
+- Master guard: `ALLOW_DESTROY_SNAPS` remains `0` by default and requires manual edit for activation.
+- Maintainability: limit functions to ~60 lines; flag overlong functions during audits.
+- Preserve documentation: retain all original comments and help text during refactors.
+
+---
+
+## Developer Workflow Notes
+- Split functions bigger than 60 lines into helpers.
+- Move all shared logic to `lib/common.sh`.
+- Avoid relying on environment variables for feature control.
+- Redirect command output to logs for later inspection (`> out.log 2>&1`).
+- Keep comments immediately above the code or block they document.
+- Before editing, review `copilot-context.md`.
+
+---
+
+## PHASE 1 — Cataloging and Code Audit (Status: ✅ Complete)
 **Date:** 2025‑12‑10  
 
 Scope
@@ -255,7 +128,7 @@ Destroy safety recommendations (Phase 2 - before enabling automated destruction)
 - Use a permanent top-level configuration guard for execution: require the master switch `ALLOW_DESTROY_SNAPS` in `lib/common.sh` to be explicitly enabled before any plan may be executed. This avoids environment-variable overrides and makes destructive capability a conscious config change.
 ---
 
-Phase 2 — Modularization & Safe Delete Scaffolding (2026‑01‑19, Status: 🚧 In Progress)
+Phase 2 — Modularization & Safe Delete Scaffolding (2026‑01‑19, Status: ✅ Complete)
 
 Note: during Phase 2 initial work a conservative, opt-in scaffold was implemented to allow safe testing of deletion flows without enabling automatic destructive behavior. Key delivered items:
 
@@ -277,7 +150,7 @@ Progress Update (2026-01-19)
 
 ----
 
-# PHASE 3 — Comparison Enhancements & Deletion Workflow (2026‑01‑22, Status: ✅ Complete)
+# PHASE 3 — Comparison Enhancements & Deletion Workflow (2026‑01‑22, Status: ✅ Complete)
 
 ### Purpose
 Finalize the comparison and cleanup pipeline so snapshot deletions are safe, reviewable, and backed by canonical evidence.

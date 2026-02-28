@@ -132,6 +132,12 @@ function identify_and_suggest_snapshot_deletion_candidates() {
   # Phase 2: evaluate candidates and build plan
   _evaluate_deletion_candidates_and_plan "$datasets_file" "$snap_holding_file" "$acc_deleted_file" "$destroy_cmds_tmp" "$plan_file"
 
+  # If a plan was generated, emit the review+exec presentation using the
+  # shared helper so formatting and ZDIFF_STDERR printing is normalized.
+  if [[ -s "$destroy_cmds_tmp" ]]; then
+    emit_plan_files_and_print "$plan_file" "${plan_file}.exec.sh"
+  fi
+
   # If plan exists, handle execution and cleanup in helpers
   _maybe_execute_plan "$destroy_cmds_tmp" "$plan_file" "$tmp_base" "$TIMESTAMP"
   # If no destroy commands were collected, emit a clear summary line so operators
@@ -172,28 +178,31 @@ function _maybe_execute_plan() {
 
   # If plan exists and user opted into apply, enforce environment guard
   if [[ -s "$destroy_cmds_tmp" ]]; then
-    if [[ "${REQUEST_ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
-      # Ask for confirmation before executing
-      if prompt_confirm "Execute destroy plan now?" "n"; then
-        # Enforce top-level allow flag: if config explicitly disables destroy
-        # execution, never run destroys regardless of CLI flags.
+    if [[ ${ERROR_OCCURRED:-0} -eq 1 ]]; then
+      echo -e "${RED}Errors detected during comparison; skipping execution prompt. Inspect ${LOG_DIR}/${SFF_TMP_PREFIX}commands.log for details.${NC}"
+      echo "Destroy plan written to: $plan_file"
+    else
+      if [[ "${REQUEST_ALLOW_DESTROY_SNAPS:-0}" -eq 1 ]]; then
+        # If master guard is disabled, do NOT prompt; clearly mark simulate mode.
         if [[ "${ALLOW_DESTROY_SNAPS:-1}" -eq 0 ]]; then
-          echo -e "${YELLOW}Execution requested but blocked: ALLOW_DESTROY_SNAPS is disabled in configuration. To permit execution, edit lib/common.sh and set ALLOW_DESTROY_SNAPS=1.${NC}"
-          echo "Destroy plan written to: $plan_file"
+          echo -e "${YELLOW}Execution requested but blocked: ALLOW_DESTROY_SNAPS is disabled (simulate mode). Destroy plan written to: ${plan_file}${NC}"
         else
-          local exec_log="$tmp_base/${SFF_TMP_PREFIX}destroy-exec-$ts.log"
-          local exec_plan="$tmp_base/${SFF_TMP_PREFIX}destroy-plan-exec-$ts.sh"
-          sed 's/^# \/sbin\/zfs destroy/\/sbin\/zfs destroy/' "$plan_file" > "$exec_plan"
-          chmod 700 "$exec_plan" || true
-          echo "Executing destroy plan; logging to: $exec_log"
-          bash "$exec_plan" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
+          # Ask for confirmation before executing
+          if prompt_confirm "Execute destroy plan now?" "n"; then
+            local exec_log="$tmp_base/${SFF_TMP_PREFIX}destroy-exec-$ts.log"
+            local exec_plan="$tmp_base/${SFF_TMP_PREFIX}destroy-plan-exec-$ts.sh"
+            sed 's/^# \/sbin\/zfs destroy/\/sbin\/zfs destroy/' "$plan_file" > "$exec_plan"
+            chmod 700 "$exec_plan" || true
+            echo "Executing destroy plan; logging to: $exec_log"
+            bash "$exec_plan" > "$exec_log" 2>&1 || echo -e "${RED}One or more destroy commands failed; see $exec_log${NC}"
+          else
+            echo "User declined to execute destroy plan. Plan remains at: $plan_file"
+          fi
         fi
       else
-        echo "User declined to execute destroy plan. Plan remains at: $plan_file"
+        echo -e "${YELLOW}Dry-run: no destroys executed (simulate mode). To apply, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh and re-run with --clean-snapshots to request execution (or --create-destroy-plan to only generate a plan).${NC}"
+        echo "Destroy plan written to: $plan_file"
       fi
-    else
-      echo -e "${YELLOW}Dry-run: no destroys executed. To apply, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh and re-run with --clean-snapshots to request execution (or --create-destroy-plan to only generate a plan).${NC}"
-      echo "Destroy plan written to: $plan_file"
     fi
   fi
 }
@@ -357,7 +366,7 @@ function _evaluate_deletion_candidates_and_plan() {
     if [[ -n "${sacred_ds[$dataset]:-}" ]]; then
       echo "Keeping all snapshots in dataset ${dataset}: dataset contains a sacred snapshot." >&2
       for current_snap in "${snapshots[@]}"; do
-        [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: dataset-level protection";
+        [[ $VERBOSE == 1 ]] && echo "v1:   Keeping ${current_snap}: dataset-level protection";
       done
       continue
     fi
@@ -367,7 +376,7 @@ function _evaluate_deletion_candidates_and_plan() {
       vlog "evaluating_snapshot=${current_snap}"
 
       if [[ -n "${sacred[$current_snap]}" ]]; then
-        [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains unignored files deleted from live."
+        [[ $VERBOSE == 1 ]] && echo "v1:   Keeping ${current_snap}: Contains unignored files deleted from live."
       else
         # Extra safety: check acc_deleted_file(s) for evidence of files present
         # in the snapshot but absent in live. We accept multiple candidate files
@@ -386,7 +395,7 @@ function _evaluate_deletion_candidates_and_plan() {
           fi
         done
         if [[ "$_found_in_acc" -eq 1 ]]; then
-          [[ $VERBOSE == 1 ]] && echo "  Keeping ${current_snap}: Contains files removed from live (refer to acc_deleted files)."
+          [[ $VERBOSE == 1 ]] && echo "v1:   Keeping ${current_snap}: Contains files removed from live (refer to acc_deleted files)."
           continue
         fi
         local compare_from
@@ -415,20 +424,20 @@ function _evaluate_deletion_candidates_and_plan() {
               _cmd="/sbin/zfs destroy ${current_snap}"
             fi
             {
-              printf '\n# Snapshot: %s\n' "$current_snap"
+              printf '\n# Snapshot: %s\n' "${WHITE}${current_snap}${NC}"
               printf '# BECAUSE: %s\n' "${_reason_short}"
               # Emit a multi-line DETAIL block with '#' prefix so the plan
               # remains comment-first and easily human-reviewable.
               printf '%s\n' "# DETAIL: The following snapshots have NO DIFFERENCE"
-              printf '# DETAIL: - %s\n' "${compare_from}"
-              printf '# DETAIL: - %s\n' "${current_snap}"
+              printf '# DETAIL: - %s\n' "${WHITE}${compare_from}${NC}"
+              printf '# DETAIL: - %s\n' "${WHITE}${current_snap}${NC}"
               printf '# Command: %s\n' "${_cmd}"
             } >> "$destroy_cmds_tmp"
             # Print final reasoning to stdout so the operator sees why the
             # candidate was chosen before the dry-run notice.
             echo -e "${YELLOW}WOULD ${RED}DESTROY${YELLOW}: ${WHITE}${current_snap}${NC}  because:\nThe following snapshots have NO DIFFERENCE\n - ${compare_from}\n - ${current_snap}"
         else
-          [[ $VERBOSE == 1 ]] && echo "Keeping ${current_snap}: diffs present"
+          [[ $VERBOSE == 1 ]] && echo "v1: Keeping ${current_snap}: diffs present"
         fi
       fi
     done

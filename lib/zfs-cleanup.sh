@@ -398,11 +398,23 @@ function _evaluate_deletion_candidates_and_plan() {
           [[ $VERBOSE == 1 ]] && echo "v1:   Keeping ${current_snap}: Contains files removed from live (refer to acc_deleted files)."
           continue
         fi
-        local compare_from
-        if (( i > 0 )); then compare_from="${snapshots[i-1]}"; else compare_from="$dataset"; fi
-        local compare_to="$current_snap"
-        if [[ -n "$compare_from" ]]; then
-          mapfile -t diff_output_for_amr < <(sff_zfs_diff "$compare_from" "$compare_to" 2>/dev/null)
+
+        # The zfs diff man states the first one is a snapshot, the 2nd param is snapshot | filesystem.  it states it displays the diff between a snap of a given filesys and another snap of that filesys from a LATER TIME or the current contents of the filesystem.  So older goes first always.  
+        local compare_older
+        local compare_newer
+        
+        if (( i > 0 )); then 
+          # snapshot-to-snapshot: older snap first, newer snap second
+          compare_older="${snapshots[i-1]}"    # older snapshot
+          compare_newer="$current_snap"         # newer snapshot
+        else 
+          # dataset-to-snapshot: snapshot first (older), live dataset second (newer)
+          compare_older="$current_snap"       # snapshot (older)
+          compare_newer="$dataset"              # live dataset (newer)
+        fi
+
+        if [[ -n "$compare_older" ]]; then
+          mapfile -t diff_output_for_amr < <(sff_zfs_diff "$compare_older" "$compare_newer" 2>/dev/null)
         else
           diff_output_for_amr=()
         fi
@@ -428,14 +440,14 @@ function _evaluate_deletion_candidates_and_plan() {
               printf '# BECAUSE: %s\n' "${_reason_short}"
               # Emit a multi-line DETAIL block with '#' prefix so the plan
               # remains comment-first and easily human-reviewable.
-              printf '%s\n' "# DETAIL: The following snapshots have NO DIFFERENCE"
-              printf '# DETAIL: - %s\n' "${WHITE}${compare_from}${NC}"
+              printf '%s\n' "# DETAIL: The following snapshots have NO DIFFERENCE (older/newer) "
+              printf '# DETAIL: - %s\n' "${WHITE}${compare_older}${NC}"
               printf '# DETAIL: - %s\n' "${WHITE}${current_snap}${NC}"
               printf '# Command: %s\n' "${_cmd}"
             } >> "$destroy_cmds_tmp"
             # Print final reasoning to stdout so the operator sees why the
             # candidate was chosen before the dry-run notice.
-            echo -e "${YELLOW}WOULD ${RED}DESTROY${YELLOW}: ${WHITE}${current_snap}${NC}  because:\nThe following snapshots have NO DIFFERENCE\n - ${compare_from}\n - ${current_snap}"
+            echo -e "${YELLOW}WOULD ${RED}DESTROY${YELLOW}: ${WHITE}${current_snap}${NC}  because:\nThe following snapshots have NO DIFFERENCE (older/newer)\n - ${compare_older}\n - ${current_snap}"
         else
           [[ $VERBOSE == 1 ]] && echo "v1: Keeping ${current_snap}: diffs present"
         fi

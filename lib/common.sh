@@ -214,32 +214,55 @@ function help(){
   cat <<'HELP'
 Usage: snapshots-find-file [ options ]
 Options are:
-[ -c ] [ -d <dataset> ] [ -f <file> ] [ -o <otherfile> ] [ -s <snap_regex> ] [ -r ] [ -v | -vv | -vvv ] [ -q ] [ -z ] [ -S ] [ -l ] [ --max-depth <n> ] [ --max-snaps <n> | -m <n> ]
+[ -c (compare) ] [ -d <dataset> ] [ -f <file> ] [ -o <otherfile> ] [ -s <snap_regex> ] [ -r (recursive) ] [ -v | -vv | -vvv ] [ -q (quiet) ] [ -z (use zdiff instead of find) ] [ -S (show dataset avail space) ] [ -l list largest snapshots) ] [ --max-depth <n> ] [ --max-snaps <n> | -m <n> ]
 
 A ZFS snapshot search tool.
-  - Uses a constructed 'find' command to search in specified snapshot for specified file, recursively by default.
+  - Uses a constructed 'find'or zfs diff  command to search in specified snapshot for specified file, recursively by default or compare snapshots and live datasets.
   - Has the ability to search through multiple or all "snapshots" in a given dataset by using wildcard.
   - Has the ability to search for "files" (in snapshots) by wildcard, and maybe other regex calls
   - Has the ability to search for multiple files in the same run by specifying multiple (space separated) files (it's faster than running multiple times).
   - Has the ability to search in child datasets snapshots (all) when -r option is specified, or when wildcard dirs are specified for dataset, e.g. dataset/*, dataset/*/*, etc..
+  - Has the ability to compare snapshots directly or snapshots to live dataset (-c option)
+  - Has the ability to manage snapshots, prune/delete them, or give you a destroy command that you can run your self
 
 USAGE:
   snapshots-find-file
+
+  # required params
   -d (required) <dataset-path to search through>
+
+  # optional params
   -c (optional) (compare snapshot files to live dataset files to find missing ones)
      (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
       Use with or without `-c`, `--create-destroy-plan` (`-p`) or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
+
   -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
+
+  -l (optional) list largest snapshot for specified dataset (use with -d) 
   -o (optional) <other-file-your-searching--for>
+
   -q (optional) quiet mode, supresses per-file lines while retaining summary and logs
+
   -s (optional) <snapshot-name-regex-term> (will search all if not specified)
+
   -r (optional) (recursively search into child datasets)
+
   -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
+
   -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
-  --create-destroy-plan (optional) orchestrate cleanup and write a destroy-plan (dry-run). This flag only generates a plan and does not attempt to apply it.
+
+  # uppercase params
   -C, --snap-only-compare (optional) run snapshot-only comparisons (pairwise snapshot diffs) instead of file-search; required by `--max-snaps`.
+
+  -S (optional) List ZFS space and List largest snapshot in results (use with -d)
+
+  # long params 
+  --create-destroy-plan (optional) orchestrate cleanup and write a destroy-plan (dry-run). This flag only generates a plan and does not attempt to apply it.
+
   --clean-snapshots (optional) run cleanup and attempt to apply suggested snapshot deletions. This flag requests execution of the generated destroy plan; actual destructive execution still requires `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` (master guard).
+
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
+
   --skip-plan (optional) skip cleanup/plan generation for this run even if CREATE_DELETE_PLAN=1
 
     Additional utility flags (non-destructive):

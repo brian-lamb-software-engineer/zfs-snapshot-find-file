@@ -228,13 +228,14 @@ USAGE:
   -d (required) <dataset-path to search through>
   -c (optional) (compare snapshot files to live dataset files to find missing ones)
      (this shifts the mode of the program to find missing files compared from specified live dataset to a snapshot, as opposed to just finding a file in a snapshot)
-    -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
       Use with or without `-c`, `--create-destroy-plan` (`-p`) or `--clean-snapshots` to prefer `zdiff` over `find`-based compare. The tool will fall back to the legacy `find` flow when `zfs` is unavailable or a per-dataset `zdiff` fails. Logs and fallback reasons are recorded in the per-run `commands.log` under `LOG_DIR`.
   -f (optional) <file-your-searching-for another-file-here> (multiple space separated allowed)
   -o (optional) <other-file-your-searching--for>
+  -q (optional) quiet mode, supresses per-file lines while retaining summary and logs
   -s (optional) <snapshot-name-regex-term> (will search all if not specified)
   -r (optional) (recursively search into child datasets)
   -v (optional) (verbose output). Use `-vv` or `--very-verbose` for very-verbose tracing (prints function entries).
+  -z (optional) use the ZFS `zdiff` (`zfs diff`) fast-path for comparisons when available.
   --create-destroy-plan (optional) orchestrate cleanup and write a destroy-plan (dry-run). This flag only generates a plan and does not attempt to apply it.
   -C, --snap-only-compare (optional) run snapshot-only comparisons (pairwise snapshot diffs) instead of file-search; required by `--max-snaps`.
   --clean-snapshots (optional) run cleanup and attempt to apply suggested snapshot deletions. This flag requests execution of the generated destroy plan; actual destructive execution still requires `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` (master guard).
@@ -1620,6 +1621,7 @@ function sff_zfs_diff() {
   local logfile="${LOG_DIR}/${SFF_TMP_PREFIX}commands.log"
   mkdir -p "$(dirname "$logfile")" 2>/dev/null || true
   local zfs_bin
+
   if [[ -x /sbin/zfs ]]; then
     zfs_bin="/sbin/zfs"
   elif command -v zfs >/dev/null 2>&1; then

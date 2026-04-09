@@ -16,7 +16,8 @@ function _collect_unignored_deleted_snapshots() {
 
   local accidentally_deleted_count=0
 
-  echo "Snapshot,File_Path,Live_Dataset_Path" > "$acc_deleted_file"
+  # Use tab-separated format instead of CSV to avoid escaping issues
+  echo -e "Snapshot\tFile_Path\tLive_Dataset_Path" > "$acc_deleted_file"
 
   while IFS= read -r dataset; do
     vlog "processing_dataset=${dataset}"
@@ -28,6 +29,9 @@ function _collect_unignored_deleted_snapshots() {
     for current_snap in "${snapshots[@]}"; do
       mapfile -t diff_output < <(sff_zfs_diff "$current_snap" "$live_dataset_full_name" 2>/dev/null)
       for line in "${diff_output[@]}"; do
+        # Skip xattr entries (extended attributes) - they are not real files
+        [[ "$line" == *"<xattrdir>"* ]] && continue
+        
         local type="${line:0:1}"
         local path="${line:2}"
         if [[ "$type" == "-" ]]; then
@@ -38,7 +42,8 @@ function _collect_unignored_deleted_snapshots() {
             fi
           done
           if [[ "$is_ignored" == "false" ]]; then
-            printf "%s,\"%s\",%s\n" "${current_snap}" "${path//\"/\"\"}" "${live_dataset_full_name}" >> "$acc_deleted_file"
+            # Use tab-separated format without escaping
+            printf "%s\t%s\t%s\n" "${current_snap}" "${path}" "${live_dataset_full_name}" >> "$acc_deleted_file"
             echo "$current_snap" >> "$snap_holding_file"
             ((accidentally_deleted_count++))
             vlog "deleted_file=${path} snapshot=${current_snap}"
@@ -309,8 +314,9 @@ function _aggregate_evidence_into_sacred() {
     [[ -f "$ef" ]] || continue
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      [[ "$line" =~ ^Snapshot,File_Path ]] && continue
-      snap=$(awk -F'|' '{gsub(/^"|"$/,"",$1); print $1}' <<< "$line")
+      [[ "$line" =~ ^Snapshot ]] && continue  # Skip header line
+      # Fix: Use tab separator instead of pipe (was a bug for CSV format)
+      snap=$(awk -F'\t' '{gsub(/^"|"$/,"",$1); print $1}' <<< "$line")
       [[ -n "$snap" ]] && printf '%s\n' "$snap"
     done < "$ef"
   done
@@ -419,9 +425,22 @@ function _evaluate_deletion_candidates_and_plan() {
           diff_output_for_amr=()
         fi
 
+        # Filter out xattr entries, M (modified), and R (renamed) entries before evaluating diffs
+        # WARNING: Skipping M/R entries assumes they are metadata-only or insignificant changes.
+        # This may delete snapshots with important data changes, renames, or modifications if zfs diff marks them as such.
+        local -a diff_output_filtered=()
+        for _line in "${diff_output_for_amr[@]}"; do
+          [[ "$_line" == *"<xattrdir>"* ]] && continue
+          # Skip M (modified) entries - assume metadata-only changes
+          [[ "$_line" =~ ^M[[:space:]] ]] && continue
+          # Skip R (renamed) entries - assume path changes are insignificant
+          [[ "$_line" =~ ^R[[:space:]] ]] && continue
+          diff_output_filtered+=("$_line")
+        done
+
         # Minimal heuristic: if there are no diffs against the previous snapshot
         # and the snapshot is not marked sacred, suggest it for deletion (dry-run).
-        if [[ ${#diff_output_for_amr[@]} -eq 0 ]]; then
+        if [[ ${#diff_output_filtered[@]} -eq 0 ]]; then
           # Construct human-readable reason for deletion to help reviewers.
             local _reason_short="No diffs against previous snapshot and not marked sacred"
             # Build a more explicit detail block so operators can see final reasoning

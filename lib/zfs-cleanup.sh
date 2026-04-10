@@ -513,7 +513,6 @@ function _evaluate_deletion_candidates_and_plan() {
             [[ "$_line" =~ ^M[[:space:]] ]] && continue
             [[ "$_line" =~ ^R[[:space:]] ]] && continue
           fi
-
           diff_output_filtered+=("$_line")
         done
 

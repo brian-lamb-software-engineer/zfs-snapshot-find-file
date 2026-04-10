@@ -15,7 +15,7 @@ CREATE_DELETE_PLAN=1
 # Master destroy execution flag (must be explicitly enabled in config).
 # WARNING: This is the master switch for destructive execution. Do NOT
 # enable it via runtime flags — edit this file to set `ALLOW_DESTROY_SNAPS=1`.
-ALLOW_DESTROY_SNAPS=0
+ALLOW_DESTROY_SNAPS=1
 # Deletion / destroy flags (safe defaults), enables --force to the destroy command
 ENABLE_ZFS_DESTROY_FORCE=0
 # shellcheck disable=SC2034

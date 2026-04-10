@@ -1,0 +1,3 @@
+*.sh text eol=lf
+snapshots-find-file text eol=lf
+zsnapfind text eol=lf

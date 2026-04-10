@@ -33,7 +33,8 @@ function _collect_unignored_deleted_snapshots() {
         [[ "$line" == *"<xattrdir>"* ]] && continue
         
         local type="${line:0:1}"
-        local path="${line:2}"
+        local path
+        path=$(sff_decode_zfs_diff_path "${line:2}")
         if [[ "$type" == "-" ]]; then
           local is_ignored="false"
           for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
@@ -91,12 +92,21 @@ function identify_and_suggest_snapshot_deletion_candidates() {
   fi
 
   echo -e "\n${RED}--- Identifying Snapshot Deletion Candidates (snapshot deletion candidates) ---${NC}"
+  if [[ "${SMART_DIFF:-0}" -eq 1 ]]; then
     echo -e "Snapshots are suggested for deletion if they do NOT contain:\n" \
       "  1. Important files that have been deleted from the live filesystem (unignored '-' diffs to live).\n" \
-        "  AND\n" \
-        "  2. Important new files or modifications (unignored '+' or 'M'/'R' diffs from their parent/preceding snapshot).\n" \
+      "  AND\n" \
+      "  2. Important new files or modifications (unignored '+' diffs, plus 'M'/'R' diffs that are not proven byte-identical).\n" \
       "Review the comparison-delta.out log in the per-run log directory before deleting any snapshot.\n" \
-        "------------------------------------------------------------${NC}"
+      "------------------------------------------------------------${NC}"
+  else
+    echo -e "Snapshots are suggested for deletion if they do NOT contain:\n" \
+      "  1. Important files that have been deleted from the live filesystem (unignored '-' diffs to live).\n" \
+      "  AND\n" \
+      "  2. Important new files or modifications (unignored '+' or 'M'/'R' diffs from their parent/preceding snapshot).\n" \
+      "Review the comparison-delta.out log in the per-run log directory before deleting any snapshot.\n" \
+      "------------------------------------------------------------${NC}"
+  fi
 
   local tmp_base="${LOG_DIR:-${TMPDIR:-/tmp}}"
 
@@ -322,6 +332,52 @@ function _aggregate_evidence_into_sacred() {
   done
 }
 
+function _smart_diff_resolve_file_path() {
+  local snapshot_or_dataset="$1"
+  local relative_path="$2"
+
+  if [[ "$snapshot_or_dataset" == *"@"* ]]; then
+    local dataset_name="${snapshot_or_dataset%@*}"
+    local snapshot_name="${snapshot_or_dataset#*@}"
+    printf '/%s/.zfs/snapshot/%s/%s\n' "$dataset_name" "$snapshot_name" "$relative_path"
+    return
+  fi
+
+  printf '/%s/%s\n' "$snapshot_or_dataset" "$relative_path"
+}
+
+function _smart_diff_files_equal_by_content() {
+  local old_file="$1"
+  local new_file="$2"
+
+  [[ -r "$old_file" && -r "$new_file" ]] || return 1
+  [[ -f "$old_file" && -f "$new_file" ]] || return 1
+  [[ $(stat -c%s "$old_file" 2>/dev/null) == $(stat -c%s "$new_file" 2>/dev/null) ]] || return 1
+  cmp -s -- "$old_file" "$new_file"
+}
+
+function _smart_diff_should_ignore_line() {
+  local diff_line="$1"
+  local compare_older="$2"
+  local compare_newer="$3"
+  local m_regex='^M[[:space:]]+(.+)'
+  local r_regex='^R[[:space:]]+([^[:space:]]+)[[:space:]]+->[[:space:]]+(.+)'
+  local old_rel_path new_rel_path old_file new_file
+
+  if [[ "$diff_line" =~ $m_regex ]]; then
+    old_rel_path=$(sff_decode_zfs_diff_path "${BASH_REMATCH[1]}")
+    new_rel_path="$old_rel_path"
+  elif [[ "$diff_line" =~ $r_regex ]]; then
+    old_rel_path=$(sff_decode_zfs_diff_path "${BASH_REMATCH[1]}")
+    new_rel_path=$(sff_decode_zfs_diff_path "${BASH_REMATCH[2]}")
+  else
+    return 1
+  fi
+
+  old_file="$(_smart_diff_resolve_file_path "$compare_older" "$old_rel_path")"
+  new_file="$(_smart_diff_resolve_file_path "$compare_newer" "$new_rel_path")"
+  _smart_diff_files_equal_by_content "$old_file" "$new_file"
+}
 function _evaluate_deletion_candidates_and_plan() {
   # Args: datasets_file, snap_holding_file, acc_deleted_file, destroy_cmds_tmp, plan_file
   local datasets_file="$1"
@@ -359,6 +415,10 @@ function _evaluate_deletion_candidates_and_plan() {
     ds="${snap%@*}"
     [[ -n "$ds" ]] && sacred_ds["$ds"]=1
   done
+
+  if [[ "${SMART_DIFF:-0}" -eq 1 ]]; then
+    echo -e "${YELLOW}Smart diff enabled (-D): M/R entries are ignored only when old and new file contents are proven identical.${NC}" >&2
+  fi
 
   vlog "datasets_file=${datasets_file} START"
   while IFS= read -r dataset; do
@@ -425,16 +485,21 @@ function _evaluate_deletion_candidates_and_plan() {
           diff_output_for_amr=()
         fi
 
-        # Filter out xattr entries, M (modified), and R (renamed) entries before evaluating diffs
-        # WARNING: Skipping M/R entries assumes they are metadata-only or insignificant changes.
-        # This may delete snapshots with important data changes, renames, or modifications if zfs diff marks them as such.
+        # Filter out xattr entries first. M/R lines are only ignored when smart-diff
+        # is explicitly enabled and the old/new file contents are proven identical.
         local -a diff_output_filtered=()
         for _line in "${diff_output_for_amr[@]}"; do
           [[ "$_line" == *"<xattrdir>"* ]] && continue
-          # Skip M (modified) entries - assume metadata-only changes
-          [[ "$_line" =~ ^M[[:space:]] ]] && continue
-          # Skip R (renamed) entries - assume path changes are insignificant
-          [[ "$_line" =~ ^R[[:space:]] ]] && continue
+
+          if [[ "${SMART_DIFF:-0}" -eq 1 ]]; then
+            if _smart_diff_should_ignore_line "$_line" "$compare_older" "$compare_newer"; then
+              continue
+            fi
+          else
+            [[ "$_line" =~ ^M[[:space:]] ]] && continue
+            [[ "$_line" =~ ^R[[:space:]] ]] && continue
+          fi
+
           diff_output_filtered+=("$_line")
         done
 

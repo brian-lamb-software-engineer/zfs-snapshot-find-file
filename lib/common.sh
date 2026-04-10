@@ -34,8 +34,9 @@ NOTIFY_DESTROY_IS_DISABLED=0
 # Request runtime flag to opt-in zfs-diff fast path in the the compare/cleanup flow (when present, prefer zfs diff fast-path over find) 
 # when set the tool will attempt zdiff and fall back to the legacy find path on per-dataset failure.
 USE_ZDIFF=${USE_ZDIFF:-0}
+SMART_DIFF=0
 # shellcheck disable=SC2034
-# `USE_ZDIFF` is set/read across files; keep top-level declaration.
+# `USE_ZDIFF` and `SMART_DIFF` are set/read across files; keep top-level declaration.
 # Capture top-level allow flags so CLI args cannot override when intentionally disabled.
 # Set these to 0 here to permanently disable plan/apply unless this file is edited.
 ALLOW_CREATE_DELETE_PLAN=${CREATE_DELETE_PLAN}
@@ -77,7 +78,7 @@ PINK="${COL}1;35m"
 
 # Export configuration flags so they are visible to sourced modules and to
 # silence static analysis (shellcheck) about intentionally-declared globals.
-export ENABLE_ZFS_DESTROY_FORCE BENCH SKIP_PLAN QUIET OTHERFILE USE_ZDIFF
+export ENABLE_ZFS_DESTROY_FORCE BENCH SKIP_PLAN QUIET OTHERFILE USE_ZDIFF SMART_DIFF
 
 #####
 # Internal runtime globals
@@ -214,7 +215,7 @@ function help(){
   cat <<'HELP'
 Usage: snapshots-find-file [ options ]
 Options are:
-[ -c (compare) ] [ -d <dataset> ] [ -f <file> ] [ -o <otherfile> ] [ -s <snap_regex> ] [ -r (recursive) ] [ -v | -vv | -vvv ] [ -q (quiet) ] [ -z (use zdiff instead of find) ] [ -S (show dataset avail space) ] [ -l list largest snapshots) ] [ --max-depth <n> ] [ --max-snaps <n> | -m <n> ]
+[ -c (compare) ] [ -d <dataset> ] [ -f <file> ] [ -o <otherfile> ] [ -s <snap_regex> ] [ -r (recursive) ] [ -v | -vv | -vvv ] [ -q (quiet) ] [ -z (use zdiff instead of find) ] [ -D (--smart-diff) ] [ -S (show dataset avail space) ] [ -l list largest snapshots) ] [ --max-depth <n> ] [ --max-snaps <n> | -m <n> ]
 
 A ZFS snapshot search tool.
   - Uses a constructed 'find'or zfs diff  command to search in specified snapshot for specified file, recursively by default or compare snapshots and live datasets.
@@ -262,6 +263,8 @@ USAGE:
   --clean-snapshots (optional) run cleanup and attempt to apply suggested snapshot deletions. This flag requests execution of the generated destroy plan; actual destructive execution still requires `ALLOW_DESTROY_SNAPS=1` in `lib/common.sh` (master guard).
 
   --force (optional) when used with destroy will add -f to zfs destroy commands in generated plan
+
+  -D, --smart-diff (optional) enable smart diff mode for cleanup compare: perform extra content validation for M/R entries and ignore only proven same-content moves or metadata-only differences.
 
   --skip-plan (optional) skip cleanup/plan generation for this run even if CREATE_DELETE_PLAN=1
 
@@ -321,6 +324,9 @@ Examples:
   snapshots-find-file -c -d "/nas/live/cloud" --create-destroy-plan -s "*" -f "index.html"
   # same using short flag -p for plan-only
   snapshots-find-file -c -d "/nas/live/cloud" -p -s "*" -f "index.html"
+
+  # compare with smart-diff enabled to ignore only proven metadata-only M/R churn
+  snapshots-find-file -c -D -v -d "/nas/live/cloud" -s "*" -f "index.html"
 
   # To apply a generated plan interactively, enable ALLOW_DESTROY_SNAPS=1 in lib/common.sh,
   # then re-run with --clean-snapshots to request execution of the generated plan (or use
@@ -598,7 +604,7 @@ function parse_arguments() {
         SNAPSHOT_ONLY=1; shift ;;
       -snap-only-compare)
         SNAPSHOT_ONLY=1; shift ;;
-      -create-destroy-plan)
+      --create-destroy-plan)
         REQUEST_SNAP_DELETE_PLAN=1; shift ;;
       --clean-snapshots)
         # Request full cleanup: generate a plan and request execution for this run.
@@ -608,6 +614,8 @@ function parse_arguments() {
       --force)
         # shellcheck disable=SC2034
         ENABLE_ZFS_DESTROY_FORCE=1; shift ;;
+      -D|--smart-diff)
+        SMART_DIFF=1; shift ;;
       --very-verbose)
         VVERBOSE=1; VERBOSE=1; shift ;;
       --zfs-diff)
@@ -838,7 +846,7 @@ function initialize_search_parameters() {
 
 # Non-destructive utilities: show zfs space and list-largest snapshots.
 function _run_zfs_list_space() {
-  local target="${DATASETPATH:-}";
+  local target="${DATASETPATH:-}"
   local zcmd
   # Use human-readable sizes for display and align columns
   if command -v /bin/sudo >/dev/null 2>&1; then
@@ -1068,6 +1076,7 @@ function ensure_max_snaps_per_dataset() {
     return 0
   fi
 
+  # snapshots to consider for deletion: the oldest (total_all - keep)
   local to_remove_count=$(( total_all - keep ))
   snaps=("${snaps_all[@]:0:to_remove_count}")
 
@@ -1388,8 +1397,8 @@ function discover_datasets() {
 ## Normalize a dataset string to ZFS-name form (no leading/trailing slash)
 function normalize_dataset_name() {
   local ds="$1"
-  ds="${ds%/}"
   ds="${ds#/}"
+  ds="${ds%/}"
   printf '%s' "$ds"
 }
 
@@ -1399,6 +1408,17 @@ function normalize_dataset_name() {
 #  $2 - snapshot root path (the directory that contains .zfs/snapshot/<snap>), e.g. /pool/dataset/.zfs/snapshot/<snap>
 #  $3 - full file path inside the snapshot, e.g. /pool/dataset/.zfs/snapshot/<snap>/path/to/file
 # Output: prints the live-equivalent path, e.g. /pool/dataset/path/to/file
+function sff_decode_zfs_diff_path() {
+  local raw_path="$1"
+
+  if command -v perl >/dev/null 2>&1; then
+    perl -e '$s = shift; $s =~ s/\\([0-7]{4})/chr(oct($1))/ge; print $s;' -- "$raw_path"
+    return
+  fi
+
+  printf '%s' "$raw_path"
+}
+
 function map_snapshot_to_live_path() {
   local dataset_name="$1"
   local snap_root="$2"

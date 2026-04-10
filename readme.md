@@ -28,13 +28,11 @@ Flags of interest:
 
 - `-c` : run compare mode (generate inventory and compare to live dataset)
 - `-v` : verbose; `-vv` enables very-verbose function-entry tracing
-- `-v` : verbose; `-vv` enables very-verbose function-entry tracing
--- `--create-destroy-plan` (`-p`): generate a destroy plan (plan-only; does not apply)
--- `--clean-snapshots`: request cleanup and attempt to apply suggested snapshot deletions (respects `ALLOW_DESTROY_SNAPS` master guard in `lib/common.sh`).
+- `--create-destroy-plan` (`-p`) : generate a destroy plan (plan-only; does not apply)
+- `--clean-snapshots` : request cleanup and attempt to apply suggested snapshot deletions (respects `ALLOW_DESTROY_SNAPS` master guard in `lib/common.sh`)
 - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
- - `-z` / `--zdiff` : opt-in ZFS `zfs diff` fast-path for compare/search flows when available (non-breaking, falls back to legacy `find` when `zfs` is unavailable)
- - `--force-find` : force legacy `find` usage for testing/debugging (skips the `zfs diff` fast-path)
-
+- `-D` / `--smart-diff` : opt-in extra content validation for `M`/`R` entries during cleanup compare; it only ignores entries when old and new file bytes are proven identical
+- `--force-find` : force legacy `find` usage for testing/debugging (skips the `zfs diff` fast-path)
 - `--max-snaps <n>`, `-m <n>` : snapshot-pruning probe. When invoked against `-d <dataset>` the tool inspects the oldest `<n>` snapshots (oldest→newest), compares consecutive pairs using `zfs diff`, and reports older snapshots that are identical to their immediate successor (candidates for deletion). This flag is intended to be used without `-c` (no live-dataset compare required). Use with `--create-destroy-plan` to generate a reviewable destroy plan or with `--clean-snapshots` to request applying the generated plan (still gated by the master `ALLOW_DESTROY_SNAPS` guard in `lib/common.sh`).
 
 Utility flags (non-destructive):
@@ -170,6 +168,12 @@ These quick examples give common workflows; run `./snapshots-find-file --help` f
 
 ```bash
 ./snapshots-find-file -c -z -v -d pool/dataset -s "*" -f "*"
+```
+
+- Run compare with smart-diff enabled to ignore only proven metadata-only `M`/`R` churn:
+
+```bash
+./snapshots-find-file -c -D -v -d pool/dataset -s "*" -f "*.jpg"
 ```
 
 - Search using `zdiff` to accelerate snapshot-to-snapshot differences (opt-in):

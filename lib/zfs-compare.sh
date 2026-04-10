@@ -173,7 +173,8 @@ function _process_diff_pair() {
 
   sff_zfs_diff "$parent_compare_point" "$current_compare_point" 2>/dev/null | while IFS=$'\t' read -r type path; do
     local diff_type_char="${type:0:1}"
-    local full_path="${path}"
+    local full_path
+    full_path=$(sff_decode_zfs_diff_path "${path}")
     local is_ignored="false"
     local rendered_type=""
 
@@ -183,8 +184,7 @@ function _process_diff_pair() {
       'M') rendered_type="MOD" ;;
       'R')
         rendered_type="REN"
-        full_path="${path}"
-        local new_path_for_check="${path##* -> }"
+        local new_path_for_check="${full_path##* -> }"
         for pattern in "${REGEX_IGNORE_PATTERNS[@]}"; do
           if [[ "$new_path_for_check" =~ $pattern ]]; then
             is_ignored="true"

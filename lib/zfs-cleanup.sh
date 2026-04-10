@@ -224,7 +224,21 @@ function _maybe_execute_plan() {
 
 # helper: cleanup temp files
 function _cleanup_cleanup_temp_files() {
-  rm -f "$1" "$2" "$3" "$4" || true
+  local datasets_file="$1"
+  local acc_deleted_file="$2"
+  local snap_holding_file="$3"
+  local destroy_cmds_tmp="$4"
+
+  rm -f "$datasets_file" "$destroy_cmds_tmp" || true
+
+  if [[ -f "$acc_deleted_file" ]]; then
+    echo -e "${CYAN}Preserved review artifact:${NC} ${YELLOW}${acc_deleted_file}${NC}"
+  fi
+
+  if [[ -f "$snap_holding_file" ]]; then
+    echo -e "${CYAN}Preserved sacred-snapshot index:${NC} ${YELLOW}${snap_holding_file}${NC}"
+  fi
+
   echo -e "${BLUE}------------------------------------------------------------${NC}"
 }
 
